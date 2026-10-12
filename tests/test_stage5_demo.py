@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from triptwin.demo_service import (
     SAMPLE_IMAGE_PATH,
     load_cached_vision,
@@ -7,6 +9,12 @@ from triptwin.demo_service import (
     timeline_html,
     tool_trace_markdown,
 )
+
+
+def test_public_deployment_installs_src_layout_package() -> None:
+    requirements = Path("requirements.txt").read_text(encoding="utf-8")
+    assert "-e ." in requirements.splitlines()
+    assert Path("app.py").read_text(encoding="utf-8").find("sys.path.insert") > 0
 
 
 def test_real_vision_evidence_is_accurate_and_private() -> None:

@@ -4,8 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import os
+import sys
 from pathlib import Path
 from typing import Any
+
+# ModelScope starts this file directly with `python app.py`.  Make the src-layout
+# package importable even before an editable install has completed.
+PROJECT_ROOT = Path(__file__).resolve().parent
+SRC_ROOT = PROJECT_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 
 import gradio as gr
 
