@@ -1,3 +1,22 @@
+---
+# ModelScope Studio card metadata
+domain: multi-modal
+tags:
+- Agent
+- AI旅行
+- 百炼
+- 飞猪旅行
+- 高德地图MCP
+- Gradio
+- TripGraph
+datasets:
+  evaluation:
+  test:
+  train:
+models:
+license: MIT License
+---
+
 # TripTwin 旅行数字孪生守护者
 
 TripTwin 将零散行程解析为结构化 `TripGraph`，使用确定性规则发现时间、日期、预算、体力和天气风险，再基于飞猪旅行真实候选生成可验证的 Plan B。它只做风险提示与候选推荐，**不会自动预订或支付**。
