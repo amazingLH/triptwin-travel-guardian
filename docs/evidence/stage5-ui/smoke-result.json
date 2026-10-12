@@ -1,0 +1,20 @@
+{
+  "generated_at": "2026-10-12T21:24:18.550308+08:00",
+  "url": "http://127.0.0.1:7860",
+  "runs": [
+    {
+      "run": 1,
+      "passed": true
+    },
+    {
+      "run": 2,
+      "passed": true
+    },
+    {
+      "run": 3,
+      "passed": true
+    }
+  ],
+  "all_passed": true,
+  "cloud_model_reinvoked": false
+}

@@ -1,0 +1,548 @@
+"""TripTwin Stage 5 Gradio P0 demo."""
+
+from __future__ import annotations
+
+import hashlib
+import os
+from pathlib import Path
+from typing import Any
+
+import gradio as gr
+
+from triptwin.demo_service import (
+    SAMPLE_IMAGE_PATH,
+    active_inspection_markdown,
+    amap_inspection_markdown,
+    chat_context,
+    load_cached_vision,
+    plan_b_markdown,
+    risk_markdown,
+    run_cached_manual_inspection,
+    timeline_html,
+    tool_trace_markdown,
+)
+from triptwin.trip_assistant import answer_with_trip_context
+from triptwin.session_history import (
+    create_session,
+    ensure_active_session,
+    history_choices,
+    save_active_session,
+    switch_session,
+)
+from triptwin.vision_parser import extract_trip_from_image
+
+
+DISCLAIMER = (
+    "价格、库存及开放时间具有时效性；结果仅用于风险分析与候选推荐。"
+    "TripTwin 不代订、不支付；上传图片前请遮挡身份证号、手机号和票号。"
+)
+
+APP_CSS = """
+.hero {background:linear-gradient(120deg,#f4f7ff,#dbeafe);padding:24px;border:1px solid #c7d7f4;border-radius:18px;color:#17233c}
+.hero h1 {color:#17233c;margin-bottom:8px}.hero p {color:#475467;margin:0}
+.timeline-item {display:grid;grid-template-columns:150px 1fr;gap:18px;padding:14px 0;border-bottom:1px solid #e6eaf2}
+.timeline-time {color:#2563eb;font-weight:700}.timeline span{color:#667085}
+.guide-card {background:#fff8e8;border:1px solid #f3d28b;border-radius:14px;padding:14px 18px}
+.guide-card h3 {color:#7a4b00;margin-top:0}.guide-card p,.guide-card li {color:#694c20}
+.chat-panel {border:1px solid #c7d7f4;border-radius:16px;background:#f8fbff;padding:8px}
+.session-bar {border:1px solid #d9e2f2;border-radius:14px;background:#f8fafc;padding:10px 14px}
+"""
+
+
+def load_example() -> tuple[str, str]:
+    return str(SAMPLE_IMAGE_PATH), "✅ 已载入完全虚构的黄金案例，无真实个人信息。"
+
+
+def build_twin(image_path: str | None) -> tuple[Any, list[list[Any]], str, str, dict[str, Any]]:
+    if not image_path:
+        raise gr.Error("请先上传图片或点击“载入合成示例”。")
+    image = Path(image_path).resolve()
+    if _same_image(image, SAMPLE_IMAGE_PATH):
+        evidence = load_cached_vision()
+        trip_payload = evidence["trip"]
+        confidence = evidence["field_confidence"]
+        low_fields = evidence["low_confidence_fields"]
+        model = evidence["model"]
+        accuracy = f"{evidence['field_accuracy']:.1%}"
+        request_note = f"复用已验真的云端解析证据 · 字段准确率 {accuracy}"
+    else:
+        extraction, metadata = extract_trip_from_image(image)
+        trip_payload = extraction.trip.model_dump(mode="json")
+        confidence = extraction.field_confidence
+        low_fields = extraction.low_confidence_fields
+        model = metadata["model"]
+        request_note = "本次图片已完成实时云端解析"
+    rows = [[name, round(float(value), 3)] for name, value in sorted(confidence.items())]
+    low_text = (
+        "✅ 没有低于 0.8 的字段。"
+        if not low_fields
+        else "⚠️ 请核对后勾选确认：" + "、".join(low_fields)
+    )
+    state = {
+        "trip": trip_payload,
+        "low_confidence_fields": low_fields,
+        "field_confidence": confidence,
+    }
+    status = f"✅ `{model}` 图片解析完成；{request_note}。"
+    return trip_payload, rows, low_text, timeline_html(trip_payload), state
+
+
+def _same_image(first: Path, second: Path) -> bool:
+    if not first.is_file() or not second.is_file():
+        return False
+    if first.resolve() == second.resolve():
+        return True
+    return hashlib.sha256(first.read_bytes()).digest() == hashlib.sha256(
+        second.read_bytes()
+    ).digest()
+
+
+def check_risks(state: dict[str, Any], confirmed: bool) -> str:
+    if not state or "trip" not in state:
+        raise gr.Error("请先构建旅行数字孪生。")
+    if state.get("low_confidence_fields") and not confirmed:
+        raise gr.Error("请先核对并确认低置信字段。")
+    return risk_markdown(state["trip"])
+
+
+def generate_plan_b(state: dict[str, Any], confirmed: bool) -> tuple[str, str]:
+    if not state or "trip" not in state:
+        raise gr.Error("请先构建旅行数字孪生。")
+    if state.get("low_confidence_fields") and not confirmed:
+        raise gr.Error("请先核对并确认低置信字段。")
+    return plan_b_markdown(state["trip"]), tool_trace_markdown()
+
+
+def answer_question(
+    question: str,
+    history: list[dict[str, Any]] | None,
+    state: dict[str, Any],
+) -> tuple[str, list[dict[str, Any]]]:
+    text = (question or "").strip()
+    if not text:
+        raise gr.Error("请先输入问题。")
+    trip_payload = (
+        state["trip"]
+        if state and isinstance(state.get("trip"), dict)
+        else load_cached_vision()["trip"]
+    )
+    conversation = list(history or [])
+    conversation.append({"role": "user", "content": text})
+    try:
+        answer = answer_with_trip_context(text, chat_context(trip_payload))
+    except Exception:
+        answer = "当前模型服务暂时不可用，请稍后重试；TripGraph 和已生成的 Plan B 不受影响。"
+    conversation.append({"role": "assistant", "content": answer})
+    return "", conversation
+
+
+def _session_snapshot(
+    trip_state: dict[str, Any] | None,
+    status: str | None,
+    confirmed: bool,
+    risks: str | None,
+    plan_b: str | None,
+    trace: str | None,
+    chat_history: list[dict[str, Any]] | None,
+    amap_status: str | None,
+    inspection_status: str | None,
+) -> dict[str, Any]:
+    return {
+        "trip_state": trip_state if isinstance(trip_state, dict) else {},
+        "status": str(status or "等待载入图片。"),
+        "confirmed": bool(confirmed),
+        "risks": str(risks or "### 风险卡片\n\n等待检查。"),
+        "plan_b": str(plan_b or "### 原方案 / Plan B\n\n等待生成。"),
+        "trace": str(trace or "### Agent 工具执行轨迹摘要\n\n等待生成。"),
+        "chat_history": list(chat_history or []),
+        "amap_status": str(amap_status or amap_inspection_markdown()),
+        "inspection_status": str(
+            inspection_status or active_inspection_markdown()
+        ),
+    }
+
+
+def _history_update(store: dict[str, Any]) -> gr.Dropdown:
+    return gr.Dropdown(
+        choices=history_choices(store),
+        value=store["active_id"],
+        label="历史会话",
+    )
+
+
+def _session_badge(session: dict[str, Any]) -> str:
+    return (
+        "**当前页面 Session ID：** `"
+        + str(session["id"])
+        + "`  \n历史保存在本浏览器；原始上传图片不会持久化。"
+    )
+
+
+def _session_view(session: dict[str, Any]) -> tuple[Any, ...]:
+    snapshot = session.get("snapshot") or {}
+    trip_state = snapshot.get("trip_state")
+    if not isinstance(trip_state, dict):
+        trip_state = {}
+    trip = trip_state.get("trip")
+    confidence_map = trip_state.get("field_confidence")
+    confidence_rows = (
+        [[name, round(float(value), 3)] for name, value in sorted(confidence_map.items())]
+        if isinstance(confidence_map, dict)
+        else []
+    )
+    low_fields = trip_state.get("low_confidence_fields")
+    if not isinstance(low_fields, list):
+        low_fields = []
+    low_text = (
+        "✅ 没有低于 0.8 的字段。"
+        if trip and not low_fields
+        else "⚠️ 请核对后勾选确认：" + "、".join(map(str, low_fields))
+        if low_fields
+        else "尚未解析。"
+    )
+    timeline = timeline_html(trip) if isinstance(trip, dict) else ""
+    return (
+        None,
+        snapshot.get("status") or "等待载入图片。",
+        trip if isinstance(trip, dict) else None,
+        confidence_rows,
+        low_text,
+        timeline,
+        bool(snapshot.get("confirmed")),
+        snapshot.get("risks") or "### 风险卡片\n\n等待检查。",
+        snapshot.get("plan_b") or "### 原方案 / Plan B\n\n等待生成。",
+        snapshot.get("trace") or "### Agent 工具执行轨迹摘要\n\n等待生成。",
+        "",
+        snapshot.get("chat_history") or [],
+        trip_state,
+        snapshot.get("amap_status") or amap_inspection_markdown(),
+        snapshot.get("inspection_status") or active_inspection_markdown(),
+    )
+
+
+def initialize_session_history(browser_store: Any) -> tuple[Any, ...]:
+    store, session = ensure_active_session(browser_store)
+    return store, _history_update(store), _session_badge(session), *_session_view(session)
+
+
+def persist_current_session(
+    browser_store: Any,
+    trip_state: dict[str, Any] | None,
+    status: str | None,
+    confirmed: bool,
+    risks: str | None,
+    plan_b: str | None,
+    trace: str | None,
+    chat_history: list[dict[str, Any]] | None,
+    amap_status: str | None,
+    inspection_status: str | None,
+) -> tuple[dict[str, Any], gr.Dropdown, str]:
+    snapshot = _session_snapshot(
+        trip_state,
+        status,
+        confirmed,
+        risks,
+        plan_b,
+        trace,
+        chat_history,
+        amap_status,
+        inspection_status,
+    )
+    store = save_active_session(browser_store, snapshot)
+    session = next(item for item in store["sessions"] if item["id"] == store["active_id"])
+    return store, _history_update(store), _session_badge(session)
+
+
+def create_new_history_session(
+    browser_store: Any,
+    trip_state: dict[str, Any] | None,
+    status: str | None,
+    confirmed: bool,
+    risks: str | None,
+    plan_b: str | None,
+    trace: str | None,
+    chat_history: list[dict[str, Any]] | None,
+    amap_status: str | None,
+    inspection_status: str | None,
+) -> tuple[Any, ...]:
+    snapshot = _session_snapshot(
+        trip_state,
+        status,
+        confirmed,
+        risks,
+        plan_b,
+        trace,
+        chat_history,
+        amap_status,
+        inspection_status,
+    )
+    store, session = create_session(browser_store, current_snapshot=snapshot)
+    return store, _history_update(store), _session_badge(session), *_session_view(session)
+
+
+def open_history_session(
+    target_id: str,
+    browser_store: Any,
+    trip_state: dict[str, Any] | None,
+    status: str | None,
+    confirmed: bool,
+    risks: str | None,
+    plan_b: str | None,
+    trace: str | None,
+    chat_history: list[dict[str, Any]] | None,
+    amap_status: str | None,
+    inspection_status: str | None,
+) -> tuple[Any, ...]:
+    if not target_id:
+        raise gr.Error("请先选择一个历史会话。")
+    snapshot = _session_snapshot(
+        trip_state,
+        status,
+        confirmed,
+        risks,
+        plan_b,
+        trace,
+        chat_history,
+        amap_status,
+        inspection_status,
+    )
+    try:
+        store, session = switch_session(
+            browser_store, target_id, current_snapshot=snapshot
+        )
+    except ValueError as exc:
+        raise gr.Error(str(exc)) from None
+    return store, _history_update(store), _session_badge(session), *_session_view(session)
+
+
+def create_app() -> gr.Blocks:
+    with gr.Blocks(title="TripTwin 旅行数字孪生守护者") as demo:
+        state = gr.State({})
+        browser_store = gr.BrowserState(
+            default_value={"version": 1, "active_id": None, "sessions": []},
+            storage_key="triptwin_sessions_v1",
+            secret=os.getenv(
+                "TRIPTWIN_BROWSER_STATE_SECRET", "triptwin-local-v1"
+            ),
+        )
+        gr.HTML("<div class='hero'><h1>TripTwin 旅行数字孪生守护者</h1><p>把行程截图变成 TripGraph，结合真实 FlyAI 与高德 MCP 证据发现衔接、日期、预算、天气和体力风险，并生成可验证 Plan B。</p></div>")
+        gr.Markdown(f"> **隐私与服务声明：** {DISCLAIMER}")
+        with gr.Row(elem_classes=["session-bar"]):
+            with gr.Column(scale=3):
+                history_select = gr.Dropdown(
+                    choices=[], label="历史会话", interactive=True
+                )
+                session_badge = gr.Markdown("正在初始化独立会话……")
+            with gr.Column(scale=1, min_width=180):
+                open_session_button = gr.Button("打开所选会话")
+                new_session_button = gr.Button(
+                    "＋ 新建独立会话", variant="secondary"
+                )
+        with gr.Row():
+            with gr.Column(scale=1):
+                image = gr.Image(type="filepath", label="① 上传行程截图")
+                load_button = gr.Button("载入合成示例", variant="secondary")
+                build_button = gr.Button("② 构建旅行数字孪生", variant="primary")
+                status = gr.Markdown("等待载入图片。")
+            with gr.Column(scale=1):
+                trip_json = gr.JSON(label="结构化 TripGraph")
+                confidence = gr.Dataframe(
+                    headers=["字段", "置信度"],
+                    datatype=["str", "number"],
+                    interactive=False,
+                    label="字段置信度",
+                )
+                low_confidence = gr.Markdown("尚未解析。")
+                confirmed = gr.Checkbox(label="我已核对并确认低置信字段")
+        timeline = gr.HTML(label="TripGraph 时间线")
+        with gr.Row():
+            check_button = gr.Button("③ 检查风险", variant="primary")
+            recheck_button = gr.Button("重新检查")
+            plan_button = gr.Button("④ 生成 Plan B", variant="primary")
+        with gr.Row():
+            risks = gr.Markdown("### 风险卡片\n\n等待检查。")
+            plan_b = gr.Markdown("### 原方案 / Plan B\n\n等待生成。")
+        trace = gr.Markdown("### Agent 工具执行轨迹摘要\n\n等待生成。")
+        with gr.Row():
+            amap_status = gr.Markdown(amap_inspection_markdown())
+            inspection_status = gr.Markdown(active_inspection_markdown())
+        inspect_button = gr.Button("⑤ 手动巡检", variant="secondary")
+        with gr.Row():
+            with gr.Column(scale=1, elem_classes=["guide-card"]):
+                gr.Markdown(
+                    """### 💡 演示操作提示
+
+1. **载入合成示例**
+2. **构建旅行数字孪生**
+3. **检查风险**
+4. **生成 Plan B**
+
+完成后可以提问：
+- 为什么存在衔接风险？
+- 第二晚推荐住哪里？
+- 是否会自动预定？
+- 候选数据来自哪里？"""
+                )
+            with gr.Column(scale=2, elem_classes=["chat-panel"]):
+                chatbot = gr.Chatbot(
+                    label="TripTwin 智能回复",
+                    layout="bubble",
+                    height=300,
+                    placeholder="这里会以对话气泡显示基于当前 TripGraph 和 Plan B 的回答。",
+                )
+                with gr.Row():
+                    question = gr.Textbox(
+                        label="向 TripTwin 提问",
+                        placeholder="可自由提问，不限于示例问题",
+                        scale=5,
+                    )
+                    ask_button = gr.Button("发送", variant="primary", scale=1)
+
+        session_inputs = [
+            browser_store,
+            state,
+            status,
+            confirmed,
+            risks,
+            plan_b,
+            trace,
+            chatbot,
+            amap_status,
+            inspection_status,
+        ]
+        session_outputs = [browser_store, history_select, session_badge]
+        view_outputs = [
+            image,
+            status,
+            trip_json,
+            confidence,
+            low_confidence,
+            timeline,
+            confirmed,
+            risks,
+            plan_b,
+            trace,
+            question,
+            chatbot,
+            state,
+            amap_status,
+            inspection_status,
+        ]
+
+        demo.load(
+            initialize_session_history,
+            inputs=[browser_store],
+            outputs=[*session_outputs, *view_outputs],
+        )
+        load_event = load_button.click(
+            load_example, outputs=[image, status], api_name="load_example"
+        )
+        load_event.then(
+            persist_current_session,
+            inputs=session_inputs,
+            outputs=session_outputs,
+        )
+        build_event = build_button.click(
+            build_twin,
+            inputs=[image],
+            outputs=[trip_json, confidence, low_confidence, timeline, state],
+            api_name="build_twin",
+        ).then(lambda: "✅ TripGraph 已构建。", outputs=status)
+        build_event.then(
+            persist_current_session,
+            inputs=session_inputs,
+            outputs=session_outputs,
+        )
+        check_event = check_button.click(
+            check_risks,
+            inputs=[state, confirmed],
+            outputs=risks,
+            api_name="check_risks",
+        )
+        check_event.then(
+            persist_current_session,
+            inputs=session_inputs,
+            outputs=session_outputs,
+        )
+        recheck_event = recheck_button.click(
+            check_risks, inputs=[state, confirmed], outputs=risks
+        )
+        recheck_event.then(
+            persist_current_session,
+            inputs=session_inputs,
+            outputs=session_outputs,
+        )
+        plan_event = plan_button.click(
+            generate_plan_b,
+            inputs=[state, confirmed],
+            outputs=[plan_b, trace],
+            api_name="generate_plan_b",
+        )
+        plan_event.then(
+            persist_current_session,
+            inputs=session_inputs,
+            outputs=session_outputs,
+        )
+        inspect_event = inspect_button.click(
+            run_cached_manual_inspection,
+            inputs=[trip_json],
+            outputs=[amap_status, inspection_status],
+            api_name="manual_inspection",
+        )
+        inspect_event.then(
+            persist_current_session,
+            inputs=session_inputs,
+            outputs=session_outputs,
+        )
+        ask_event = ask_button.click(
+            answer_question,
+            inputs=[question, chatbot, state],
+            outputs=[question, chatbot],
+            api_name="ask_triptwin",
+        )
+        ask_event.then(
+            persist_current_session,
+            inputs=session_inputs,
+            outputs=session_outputs,
+        )
+        submit_event = question.submit(
+            answer_question,
+            inputs=[question, chatbot, state],
+            outputs=[question, chatbot],
+        )
+        submit_event.then(
+            persist_current_session,
+            inputs=session_inputs,
+            outputs=session_outputs,
+        )
+        new_session_button.click(
+            create_new_history_session,
+            inputs=session_inputs,
+            outputs=[*session_outputs, *view_outputs],
+            api_name="new_session",
+        )
+        open_session_button.click(
+            open_history_session,
+            inputs=[history_select, *session_inputs],
+            outputs=[*session_outputs, *view_outputs],
+            api_name="open_session",
+        )
+    return demo
+
+
+demo = create_app()
+
+
+if __name__ == "__main__":
+    server_port = int(
+        os.getenv("PORT", os.getenv("GRADIO_SERVER_PORT", "7860"))
+    )
+    demo.launch(
+        inbrowser=os.getenv("TRIPTWIN_NO_BROWSER") != "1",
+        show_error=False,
+        server_name=os.getenv("GRADIO_SERVER_NAME", "0.0.0.0"),
+        server_port=server_port,
+        theme=gr.themes.Soft(),
+        css=APP_CSS,
+        allowed_paths=[str(Path(__file__).resolve().parent / "assets")],
+    )

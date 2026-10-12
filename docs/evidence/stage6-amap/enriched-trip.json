@@ -1,0 +1,174 @@
+{
+  "trip_id": "hangzhou-golden-001",
+  "version": "1.0",
+  "title": "杭州两日风险黄金案例",
+  "start": "2026-10-18T08:00:00+08:00",
+  "end": "2026-10-20T18:00:00+08:00",
+  "travelers": {
+    "adults": 1,
+    "children": 0,
+    "seniors": 1,
+    "mobility_limitations": [
+      "同行老人膝关节不适，需要减少步行和换乘"
+    ]
+  },
+  "constraints": {
+    "budget_cny": "1900",
+    "max_plan_b_extra_cost_cny": "500",
+    "minimum_connection_buffer_minutes": 20,
+    "max_daily_walk_minutes": 60,
+    "max_daily_activities": 3,
+    "max_transfers_per_leg": 1,
+    "protected_event_ids": [
+      "train-sh-hz",
+      "hotel-west-lake"
+    ],
+    "preferences": [
+      "西湖周边",
+      "真实可预订候选",
+      "雨天优先室内"
+    ],
+    "avoidances": [
+      "长距离步行",
+      "频繁换乘"
+    ]
+  },
+  "events": [
+    {
+      "id": "train-sh-hz",
+      "event_type": "transport",
+      "title": "上海至杭州高铁",
+      "start": "2026-10-18T08:30:00+08:00",
+      "end": "2026-10-18T10:00:00+08:00",
+      "origin": {
+        "name": "上海虹桥站",
+        "city": "上海"
+      },
+      "destination": {
+        "name": "杭州东站",
+        "city": "杭州"
+      },
+      "cost_cny": "150",
+      "source": "synthetic-order",
+      "confidence": 1.0,
+      "walking_minutes": 5,
+      "metadata": {
+        "booking_status": "protected"
+      }
+    },
+    {
+      "id": "west-lake-boat",
+      "event_type": "activity",
+      "title": "西湖游船预约",
+      "start": "2026-10-18T10:35:00+08:00",
+      "end": "2026-10-18T11:35:00+08:00",
+      "location": {
+        "name": "西湖少年宫码头",
+        "city": "杭州"
+      },
+      "cost_cny": "80",
+      "source": "synthetic-order",
+      "confidence": 0.95,
+      "depends_on": [
+        "train-sh-hz"
+      ],
+      "transfer_from_event_id": "train-sh-hz",
+      "travel_minutes_from_previous": 39,
+      "walking_minutes": 20,
+      "transfer_count": 1,
+      "weather_sensitive": true,
+      "metadata": {
+        "amap_route_evidence": {
+          "source_tool": "maps_direction_transit_integrated",
+          "fetched_at": "2026-10-12T12:56:40.764401Z",
+          "origin_name": "杭州东站",
+          "destination_name": "西湖少年宫码头",
+          "origin_coordinates": "120.212600,30.290851",
+          "destination_coordinates": "120.130396,30.259242",
+          "destination_precision": "区县",
+          "distance_meters": 11408,
+          "duration_seconds": 2331,
+          "duration_minutes": 38.9,
+          "walking_distance_meters": 570,
+          "transfer_count": 2,
+          "status": "verified",
+          "warning": "终点仅匹配到行政区级坐标，路线可作风险参考，但需再次确认精确 POI。"
+        },
+        "amap_weather_evidence": {
+          "source_tool": "maps_weather",
+          "fetched_at": "2026-10-12T12:56:40.828481+00:00",
+          "event_date": "2026-10-18",
+          "status": "unverified",
+          "forecast": null,
+          "warning": "高德返回的预报日期未覆盖该活动日期，禁止估算天气。"
+        }
+      }
+    },
+    {
+      "id": "zhejiang-museum",
+      "event_type": "activity",
+      "title": "浙江省博物馆参观",
+      "start": "2026-10-18T13:00:00+08:00",
+      "end": "2026-10-18T15:00:00+08:00",
+      "location": {
+        "name": "浙江省博物馆孤山馆区",
+        "city": "杭州"
+      },
+      "cost_cny": "0",
+      "source": "synthetic-plan",
+      "confidence": 0.9,
+      "walking_minutes": 45,
+      "transfer_count": 1,
+      "metadata": {}
+    },
+    {
+      "id": "hotel-west-lake",
+      "event_type": "accommodation",
+      "title": "西湖附近酒店",
+      "start": "2026-10-18T15:00:00+08:00",
+      "end": "2026-10-19T11:00:00+08:00",
+      "location": {
+        "name": "西湖附近合成酒店",
+        "city": "杭州"
+      },
+      "cost_cny": "900",
+      "source": "synthetic-order",
+      "confidence": 1.0,
+      "walking_minutes": 10,
+      "metadata": {
+        "booking_status": "protected",
+        "nights": 1
+      }
+    },
+    {
+      "id": "longjing-hike",
+      "event_type": "activity",
+      "title": "龙井村户外徒步",
+      "start": "2026-10-19T14:00:00+08:00",
+      "end": "2026-10-19T17:00:00+08:00",
+      "location": {
+        "name": "龙井村",
+        "city": "杭州"
+      },
+      "cost_cny": "300",
+      "source": "synthetic-plan",
+      "confidence": 0.85,
+      "walking_minutes": 90,
+      "transfer_count": 2,
+      "proposed_extra_cost_cny": "600",
+      "weather_sensitive": true,
+      "metadata": {
+        "weather_rule_reserved_for_stage_6": true,
+        "amap_weather_evidence": {
+          "source_tool": "maps_weather",
+          "fetched_at": "2026-10-12T12:56:40.828481+00:00",
+          "event_date": "2026-10-19",
+          "status": "unverified",
+          "forecast": null,
+          "warning": "高德返回的预报日期未覆盖该活动日期，禁止估算天气。"
+        }
+      }
+    }
+  ],
+  "risks": []
+}

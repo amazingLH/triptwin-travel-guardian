@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+.stage4-last-session
+*.pem
+*.key
+
+# Build and editor output
+build/
+dist/
+*.egg-info/
+.idea/
+.vscode/
+Thumbs.db
+.DS_Store
+
+# Local scratch and vendored troubleshooting copies
+_vendor/
+packages/
+

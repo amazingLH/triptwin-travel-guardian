@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "triptwin"
+version = "0.1.0"
+description = "TripGraph and deterministic travel-risk engine for TripTwin"
+requires-python = ">=3.11"
+dependencies = [
+  "gradio>=5,<7",
+  "pydantic>=2.9,<3",
+  "httpx[socks]>=0.27,<1",
+  "python-dotenv>=1.0,<2",
+]
+
+[project.scripts]
+triptwin = "triptwin.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+pythonpath = ["src"]
+testpaths = ["tests"]
+

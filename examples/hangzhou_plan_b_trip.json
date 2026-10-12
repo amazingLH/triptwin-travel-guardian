@@ -1,0 +1,113 @@
+{
+  "trip_id": "hangzhou-golden-001",
+  "version": "1.1",
+  "title": "杭州两日低风险 Plan B",
+  "start": "2026-10-18T08:00:00+08:00",
+  "end": "2026-10-20T18:00:00+08:00",
+  "travelers": {
+    "adults": 1,
+    "children": 0,
+    "seniors": 1,
+    "mobility_limitations": ["同行老人膝关节不适，需要减少步行和换乘"]
+  },
+  "constraints": {
+    "budget_cny": "1900",
+    "max_plan_b_extra_cost_cny": "500",
+    "minimum_connection_buffer_minutes": 20,
+    "max_daily_walk_minutes": 60,
+    "max_daily_activities": 3,
+    "max_transfers_per_leg": 1,
+    "protected_event_ids": ["train-sh-hz", "hotel-west-lake"],
+    "preferences": ["西湖周边", "真实可预订候选", "雨天优先室内"],
+    "avoidances": ["长距离步行", "频繁换乘"]
+  },
+  "events": [
+    {
+      "id": "train-sh-hz",
+      "event_type": "transport",
+      "title": "上海至杭州高铁",
+      "start": "2026-10-18T08:30:00+08:00",
+      "end": "2026-10-18T10:00:00+08:00",
+      "origin": {"name": "上海虹桥站", "city": "上海"},
+      "destination": {"name": "杭州东站", "city": "杭州"},
+      "cost_cny": "150",
+      "source": "synthetic-order",
+      "confidence": 1.0,
+      "walking_minutes": 5,
+      "metadata": {"booking_status": "protected"}
+    },
+    {
+      "id": "west-lake-culture-hall",
+      "event_type": "activity",
+      "title": "西湖文化室内展",
+      "start": "2026-10-18T11:15:00+08:00",
+      "end": "2026-10-18T12:00:00+08:00",
+      "location": {"name": "西湖文化空间", "city": "杭州"},
+      "cost_cny": "60",
+      "source": "plan-b",
+      "confidence": 0.9,
+      "depends_on": ["train-sh-hz"],
+      "transfer_from_event_id": "train-sh-hz",
+      "travel_minutes_from_previous": 45,
+      "walking_minutes": 10,
+      "transfer_count": 0,
+      "weather_sensitive": false
+    },
+    {
+      "id": "zhejiang-museum",
+      "event_type": "activity",
+      "title": "浙江省博物馆参观",
+      "start": "2026-10-18T13:30:00+08:00",
+      "end": "2026-10-18T15:00:00+08:00",
+      "location": {"name": "浙江省博物馆孤山馆区", "city": "杭州"},
+      "cost_cny": "0",
+      "source": "plan-b",
+      "confidence": 0.9,
+      "walking_minutes": 20,
+      "transfer_count": 1
+    },
+    {
+      "id": "hotel-west-lake",
+      "event_type": "accommodation",
+      "title": "西湖附近酒店",
+      "start": "2026-10-18T15:00:00+08:00",
+      "end": "2026-10-19T11:00:00+08:00",
+      "location": {"name": "西湖附近合成酒店", "city": "杭州"},
+      "cost_cny": "900",
+      "source": "synthetic-order",
+      "confidence": 1.0,
+      "walking_minutes": 10,
+      "metadata": {"booking_status": "protected", "nights": 1}
+    },
+    {
+      "id": "hotel-night-two",
+      "event_type": "accommodation",
+      "title": "第二晚补充住宿",
+      "start": "2026-10-19T15:00:00+08:00",
+      "end": "2026-10-20T12:00:00+08:00",
+      "location": {"name": "杭州第二晚合成候选酒店", "city": "杭州"},
+      "cost_cny": "100",
+      "source": "synthetic-plan-b",
+      "confidence": 0.8,
+      "walking_minutes": 5,
+      "metadata": {"nights": 1, "requires_real_flyai_candidate": true}
+    },
+    {
+      "id": "hangzhou-museum",
+      "event_type": "activity",
+      "title": "杭州博物馆室内参观",
+      "start": "2026-10-19T14:00:00+08:00",
+      "end": "2026-10-19T16:00:00+08:00",
+      "location": {"name": "杭州博物馆", "city": "杭州"},
+      "cost_cny": "200",
+      "source": "plan-b",
+      "confidence": 0.9,
+      "walking_minutes": 20,
+      "transfer_count": 1,
+      "proposed_extra_cost_cny": "300",
+      "weather_sensitive": false
+    }
+  ],
+  "risks": []
+}
+

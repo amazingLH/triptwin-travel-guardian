@@ -1,0 +1,96 @@
+{
+  "session_id": "sesn_01M4R2YRTPD9SK0J2EBBW9E9KV",
+  "captured_at": "2026-10-12T12:56:54.842235Z",
+  "run_status": "end_turn",
+  "event_count": 19,
+  "tool_call_count": 4,
+  "tool_output_count": 4,
+  "error_count": 0,
+  "tool_names": [
+    "maps_geo",
+    "maps_direction_transit_integrated",
+    "maps_weather"
+  ],
+  "route": {
+    "source_tool": "maps_direction_transit_integrated",
+    "fetched_at": "2026-10-12T12:56:40.764401Z",
+    "origin_name": "杭州东站",
+    "destination_name": "西湖少年宫码头",
+    "origin_coordinates": "120.212600,30.290851",
+    "destination_coordinates": "120.130396,30.259242",
+    "destination_precision": "区县",
+    "distance_meters": 11408,
+    "duration_seconds": 2331,
+    "duration_minutes": 38.9,
+    "walking_distance_meters": 570,
+    "transfer_count": 2,
+    "status": "verified",
+    "warning": "终点仅匹配到行政区级坐标，路线可作风险参考，但需再次确认精确 POI。"
+  },
+  "weather": {
+    "source_tool": "maps_weather",
+    "fetched_at": "2026-10-12T12:56:40.828481Z",
+    "city": "杭州市",
+    "forecasts": [
+      {
+        "date": "2026-10-12",
+        "dayweather": "晴",
+        "nightweather": "晴",
+        "daytemp": "27",
+        "nighttemp": "17",
+        "daywind": "北",
+        "nightwind": "北",
+        "daypower": "1-3",
+        "nightpower": "1-3",
+        "week": "1",
+        "daytemp_float": "27.0",
+        "nighttemp_float": "17.0"
+      },
+      {
+        "date": "2026-10-13",
+        "dayweather": "晴",
+        "nightweather": "晴",
+        "daytemp": "28",
+        "nighttemp": "18",
+        "daywind": "西南",
+        "nightwind": "西南",
+        "daypower": "1-3",
+        "nightpower": "1-3",
+        "week": "2",
+        "daytemp_float": "28.0",
+        "nighttemp_float": "18.0"
+      },
+      {
+        "date": "2026-10-14",
+        "dayweather": "多云",
+        "nightweather": "多云",
+        "daytemp": "25",
+        "nighttemp": "17",
+        "daywind": "东北",
+        "nightwind": "东北",
+        "daypower": "1-3",
+        "nightpower": "1-3",
+        "week": "3",
+        "daytemp_float": "25.0",
+        "nighttemp_float": "17.0"
+      },
+      {
+        "date": "2026-10-15",
+        "dayweather": "小雨",
+        "nightweather": "大雨",
+        "daytemp": "24",
+        "nighttemp": "19",
+        "daywind": "东北",
+        "nightwind": "东北",
+        "daypower": "1-3",
+        "nightpower": "1-3",
+        "week": "4",
+        "daytemp_float": "24.0",
+        "nighttemp_float": "19.0"
+      }
+    ],
+    "trip_dates_covered": false,
+    "status": "verified",
+    "warning": "天气预报未覆盖完整行程日期，未覆盖日期保持未核验。"
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "valid": true,
+  "flyai_evidence_valid": true,
+  "protected_event_ids_untouched": true,
+  "selections": [
+    {
+      "event_id": "longjing-hike",
+      "name": "中国茶叶博物馆(双峰馆区)",
+      "source_url": "https://router.feizhu.com/multi/webview?url=https%3A%2F%2Frouter.feizhu.com%2Fws%2F42Ds3V",
+      "extra_cost_cny": "0",
+      "covered_risk_ids": [
+        "budget:projected_total",
+        "mobility:2026-10-19"
+      ]
+    },
+    {
+      "event_id": "west-lake-boat",
+      "name": "西湖博物馆",
+      "source_url": "https://router.feizhu.com/multi/webview?url=https%3A%2F%2Frouter.feizhu.com%2Fws%2F1xktWu",
+      "extra_cost_cny": "0",
+      "covered_risk_ids": [
+        "time_connection:train-sh-hz:west-lake-boat",
+        "mobility:2026-10-18"
+      ]
+    },
+    {
+      "event_id": "zhejiang-museum",
+      "name": "浙江省博物馆（孤山馆区）",
+      "source_url": "https://router.feizhu.com/multi/webview?url=https%3A%2F%2Frouter.feizhu.com%2Fws%2F2baEQ9",
+      "extra_cost_cny": "0",
+      "covered_risk_ids": [
+        "mobility:2026-10-18"
+      ]
+    },
+    {
+      "event_id": "additive:date_consistency:missing_accommodation_nights",
+      "name": "如家精选-杭州西湖景区苏堤店",
+      "source_url": "https://router.feizhu.com/multi/webview?url=https%3A%2F%2Frouter.feizhu.com%2Fws%2F1o2mzR",
+      "extra_cost_cny": "135",
+      "covered_risk_ids": [
+        "date_consistency:missing_accommodation_nights"
+      ]
+    }
+  ],
+  "unresolved_risk_ids": [],
+  "rejection_reasons": []
+}

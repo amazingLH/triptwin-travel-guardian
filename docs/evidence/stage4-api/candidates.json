@@ -1,0 +1,371 @@
+{
+  "status": "ok",
+  "flyai_commands": [
+    {
+      "command": "flyai search-poi --city-name \"杭州\" --keyword \"博物馆\" --category \"博物馆\"",
+      "exit_code": 0,
+      "result_status": 0,
+      "items_returned": 10
+    },
+    {
+      "command": "flyai search-poi --city-name \"杭州\" --keyword \"西湖\" --category \"山湖田园\"",
+      "exit_code": 0,
+      "result_status": 0,
+      "items_returned": 10
+    },
+    {
+      "command": "flyai keyword-search --query \"杭州室内景点 低步行 雨天\"",
+      "exit_code": 0,
+      "result_status": 0,
+      "items_returned": 10
+    },
+    {
+      "command": "cd /root/workspace && flyai search-hotel --dest-name \"杭州\" --poi-name \"西湖\" --check-in-date 2026-10-19 --check-out-date 2026-10-20 > /tmp/hotel1.json 2>/tmp/hotel1.err; echo EXIT:$?; wc -c /tmp/hotel1.json; tail -c 500 /tmp/hotel1.err",
+      "exit_code": 0,
+      "result_status": 0,
+      "result_message": null
+    },
+    {
+      "command": "cd /root/workspace && flyai search-hotel --dest-name \"杭州\" --poi-name \"西湖\" --check-in-date 2026-10-19 --check-out-date 2026-10-20 --sort distance_asc > /tmp/hotel2.json 2>/tmp/hotel2.err; echo EXIT:$?; wc -c /tmp/hotel2.json",
+      "exit_code": 0,
+      "result_status": 0,
+      "result_message": null
+    },
+    {
+      "command": "cd /root/workspace && flyai search-hotel --dest-name \"杭州\" --poi-name \"西湖\" --check-in-date 2026-10-19 --check-out-date 2026-10-20 --max-price 500 > /tmp/hotel3.json 2>/tmp/hotel3.err; echo EXIT:$?; wc -c /tmp/hotel3.json",
+      "exit_code": 0,
+      "result_status": 0,
+      "result_message": null
+    },
+    {
+      "command": "cd /root/workspace && flyai search-hotel --dest-name \"杭州\" --poi-name \"西湖\" --check-in-date 2026-10-19 --check-out-date 2026-10-20 --hotel-types \"酒店\" > /tmp/hotel4.json 2>/tmp/hotel4.err; echo EXIT:$?; wc -c /tmp/hotel4.json; tail -c 300 /tmp/hotel4.err",
+      "exit_code": 0,
+      "result_status": 0,
+      "result_message": null
+    }
+  ],
+  "candidates": {
+    "longjing-hike": {
+      "risk_ids": [
+        "budget:projected_total",
+        "mobility:2026-10-19"
+      ],
+      "risk_summary": "户外徒步涉及长距离步行且成本超预算；雨天优先室内、低步行替代。",
+      "options": [
+        {
+          "name": "中国茶叶博物馆(双峰馆区)",
+          "address": "浙江省杭州市西湖区西湖街道龙井路88号",
+          "category": "博物馆",
+          "freePoiStatus": "FREE",
+          "price_cny": 0,
+          "extra_cost_cny": 0,
+          "indoor": true,
+          "low_walking": true,
+          "rationale": "位于龙井路，与原龙井村同区域，无需额外换乘；室内免费博物馆，茶文化主题与龙井产地呼应；预算增量 ¥0，远低于 ¥500 上限。",
+          "poi_id": "2357",
+          "jumpUrl": "https://router.feizhu.com/multi/webview?url=https%3A%2F%2Frouter.feizhu.com%2Fws%2F42Ds3V",
+          "mainPic": "https://img.alicdn.com/tfscom/TB10Mr_QkzoK1RjSZFlSuui4VXa"
+        },
+        {
+          "name": "中国丝绸博物馆",
+          "address": "浙江省杭州市西湖区西湖街道玉皇山路73-1号(近南山路)",
+          "category": "博物馆",
+          "freePoiStatus": "FREE",
+          "price_cny": 0,
+          "extra_cost_cny": 0,
+          "indoor": true,
+          "low_walking": true,
+          "rationale": "4A 级免费博物馆，西湖畔，室内参观为主；步行量低，适合雨天；预算增量 ¥0。",
+          "poi_id": "2358",
+          "poi_level": "4",
+          "jumpUrl": "https://router.feizhu.com/multi/webview?url=https%3A%2F%2Frouter.feizhu.com%2Fws%2F2yO0g4",
+          "mainPic": "https://img.alicdn.com/imgextra/i1/6000000003790/O1CN01nwWpaf1drryagIAvl_!!6000000003790-0-fliggyimage.jpg"
+        },
+        {
+          "name": "杭州南宋官窑博物馆",
+          "address": "浙江省杭州市上城区南星街道南复路60号",
+          "category": "博物馆",
+          "freePoiStatus": "FREE",
+          "price_cny": 0,
+          "extra_cost_cny": 0,
+          "indoor": true,
+          "low_walking": true,
+          "rationale": "免费室内博物馆，可动手体验陶艺，绿化好游人少，适合低强度游览；预算增量 ¥0。",
+          "poi_id": "2359",
+          "jumpUrl": "https://router.feizhu.com/multi/webview?url=https%3A%2F%2Frouter.feizhu.com%2Fws%2F3kvTcf",
+          "mainPic": "https://img.alicdn.com/tfscom/TB1q0k4etzJ8KJjSspkSuvF7VXa"
+        }
+      ]
+    },
+    "west-lake-boat": {
+      "risk_ids": [
+        "time_connection:train-sh-hz:west-lake-boat",
+        "mobility:2026-10-18"
+      ],
+      "risk_summary": "高铁到达至游船仅 35 分钟，至少需 65 分钟；建议保留受保护交通节点，顺延或替换游船为时间更灵活的室内候选。",
+      "options": [
+        {
+          "name": "西湖博物馆",
+          "address": "浙江省杭州市上城区清波街道南山路89号",
+          "category": "博物馆",
+          "freePoiStatus": "FREE",
+          "price_cny": 0,
+          "extra_cost_cny": 0,
+          "indoor": true,
+          "low_walking": true,
+          "rationale": "位于西湖畔南山路，无需赶固定班次，到达即可入馆，消除 35 分钟衔接压力；室内免费，雨天友好；预算增量 ¥0。",
+          "poi_id": "14965089",
+          "jumpUrl": "https://router.feizhu.com/multi/webview?url=https%3A%2F%2Frouter.feizhu.com%2Fws%2F1xktWu",
+          "mainPic": "https://img.alicdn.com/imgextra/i3/2964230429/O1CN01V2Ax8w1F2WT8TcXwD_!!2964230429-0-cloudwork.jpg"
+        },
+        {
+          "name": "西湖游船(延后班次)",
+          "address": "杭州市西湖游船码头",
+          "category": "城市观光",
+          "freePoiStatus": "NOT_FREE",
+          "price_cny": 69,
+          "extra_cost_cny": 0,
+          "indoor": false,
+          "low_walking": true,
+          "rationale": "保留原活动类型但顺延至更晚班次（如 12:00 后），消除 35 分钟衔接风险；票价 ¥69 在预算内；注意雨天户外体验受限。",
+          "poi_id": "203005",
+          "ticket_name": "上岛游船票（可上三潭印月岛） 成人票",
+          "jumpUrl": "https://router.feizhu.com/multi/webview?url=https%3A%2F%2Frouter.feizhu.com%2Fws%2F4Br1JK",
+          "mainPic": "https://img.alicdn.com/imgextra/i4/6000000000183/O1CN01EPq6nL1DDrIVRjduS_!!6000000000183-2-fliggyimage.png"
+        }
+      ]
+    },
+    "zhejiang-museum": {
+      "risk_ids": [
+        "mobility:2026-10-18"
+      ],
+      "risk_summary": "2026-10-18 全天行程强度超标；建议减少步行与换乘，优先西湖周边室内候选以压缩动线。",
+      "options": [
+        {
+          "name": "浙江省博物馆（孤山馆区）",
+          "address": "浙江省杭州市西湖区西湖街道孤山路25号",
+          "category": "博物馆",
+          "freePoiStatus": "FREE",
+          "price_cny": 0,
+          "extra_cost_cny": 0,
+          "indoor": true,
+          "low_walking": true,
+          "rationale": "位于西湖孤山南麓，与上午西湖活动同区域，步行即可到达，无需额外换乘；免费室内，减少全天移动量；预算增量 ¥0。",
+          "poi_id": "2267",
+          "jumpUrl": "https://router.feizhu.com/multi/webview?url=https%3A%2F%2Frouter.feizhu.com%2Fws%2F2baEQ9",
+          "mainPic": "https://img.alicdn.com/tfscom/TB1Lr5tiGmgSKJjSsplSuuICpXa"
+        },
+        {
+          "name": "西湖博物馆",
+          "address": "浙江省杭州市上城区清波街道南山路89号",
+          "category": "博物馆",
+          "freePoiStatus": "FREE",
+          "price_cny": 0,
+          "extra_cost_cny": 0,
+          "indoor": true,
+          "low_walking": true,
+          "rationale": "西湖畔室内免费博物馆，展陈轻量，可灵活控制游览时长以降低全天强度；与西湖活动同区域，无额外换乘。",
+          "poi_id": "14965089",
+          "jumpUrl": "https://router.feizhu.com/multi/webview?url=https%3A%2F%2Frouter.feizhu.com%2Fws%2F1xktWu",
+          "mainPic": "https://img.alicdn.com/imgextra/i3/2964230429/O1CN01V2Ax8w1F2WT8TcXwD_!!2964230429-0-cloudwork.jpg"
+        }
+      ]
+    }
+  },
+  "notes": [
+    "受保护节点 hotel-west-lake 和 train-sh-hz 未做任何更改，仅对 affected_events 提供候选。",
+    "所有候选均来自 FlyAI CLI 真实查询返回（3 次查询，status=0），未使用模型记忆编造数据。",
+    "除西湖游船延后班次（¥69）外，其余候选均为免费（FREE），预算增量 ¥0，远低于 ¥500 上限。",
+    "未查询到候选景点的实时营业状态、雨天是否正常开放及预约余量，需用户在飞猪页面确认。",
+    "西湖游船延后班次的具体发船时刻表未查询到，需在预订页面确认 2026-10-18 各班次时间。",
+    "浙江省博物馆之江馆区（展览展馆榜第1名）虽为优质候选，但位于转塘街道之江文化中心，距西湖较远，不符合'少换乘'偏好，未纳入推荐。",
+    "本次查询未涉及酒店住宿日期补充（date_consistency 风险），该风险需单独执行 search-hotel 查询以覆盖缺失住宿晚数。",
+    "未执行任何预订或支付操作；所有 jumpUrl 仅供用户查看与自行预订。",
+    "所有候选均来自 flyai search-hotel 实时返回，未做任何预订或支付操作。",
+    "jumpUrl 使用工具返回的 detailUrl 字段（search-hotel 的预订链接映射规则）。",
+    "价格字段原样来自工具返回的 price（如 \"¥135\"），解析为整数 CNY；本次 6 个候选均有价格返回，无 null 值。若后续复查无价，则必须写 null 而非估算。",
+    "同一酒店在不同查询调用中返回的 detailUrl 短链可能不同（例：如家精选仅出现在 --hotel-types 酒店 那次调用），此处记录的是实际命中那一次的 URL。",
+    "工具未返回真实评分（score/review 字段在本次结果中为空或未提供），因此未展示评分信息——标注为“未查询到”。",
+    "工具未返回退改政策与含税明细，价格仅为列表展示价，最终以下单页为准——标注为“未查询到”。",
+    "protected_event_ids（hotel-west-lake、train-sh-hz）未被读取修改，本文件仅新增候选，不含对既有订单的任何变更指令。",
+    "按要求未重复执行景点（search-poi）查询。",
+    "杭州七居民宿(西湖太子湾店) ¥2293、杭州三台山庄 ¥3889 等候选因超出 max_plan_b_extra_cost_cny=500 已被排除，未列入 options。",
+    "所有候选均来自 flyai search-hotel 实时返回，未做任何预订或支付操作。",
+    "jumpUrl 使用工具返回的 detailUrl 字段（search-hotel 的预订链接映射规则）。",
+    "价格字段原样来自工具返回的 price（如 \"¥135\"），解析为整数 CNY；本次 6 个候选均有价格返回，无 null 值。若后续复查无价，则必须写 null 而非估算。",
+    "同一酒店在不同查询调用中返回的 detailUrl 短链可能不同（例：如家精选仅出现在 --hotel-types 酒店 那次调用），此处记录的是实际命中那一次的 URL。",
+    "工具未返回真实评分（score/review 字段在本次结果中为空或未提供），因此未展示评分信息——标注为“未查询到”。",
+    "工具未返回退改政策与含税明细，价格仅为列表展示价，最终以下单页为准——标注为“未查询到”。",
+    "protected_event_ids（hotel-west-lake、train-sh-hz）未被读取修改，本文件仅新增候选，不含对既有订单的任何变更指令。",
+    "按要求未重复执行景点（search-poi）查询。",
+    "杭州七居民宿(西湖太子湾店) ¥2293、杭州三台山庄 ¥3889 等候选因超出 max_plan_b_extra_cost_cny=500 已被排除，未列入 options。",
+    "所有候选均来自 flyai search-hotel 实时返回，未做任何预订或支付操作。",
+    "jumpUrl 使用工具返回的 detailUrl 字段（search-hotel 的预订链接映射规则）。",
+    "价格字段原样来自工具返回的 price（如 \"¥135\"），解析为整数 CNY；本次 6 个候选均有价格返回，无 null 值。若后续复查无价，则必须写 null 而非估算。",
+    "同一酒店在不同查询调用中返回的 detailUrl 短链可能不同（例：如家精选仅出现在 --hotel-types 酒店 那次调用），此处记录的是实际命中那一次的 URL。",
+    "工具未返回真实评分（score/review 字段在本次结果中为空或未提供），因此未展示评分信息——标注为“未查询到”。",
+    "工具未返回退改政策与含税明细，价格仅为列表展示价，最终以下单页为准——标注为“未查询到”。",
+    "protected_event_ids（hotel-west-lake、train-sh-hz）未被读取修改，本文件仅新增候选，不含对既有订单的任何变更指令。",
+    "按要求未重复执行景点（search-poi）查询。",
+    "杭州七居民宿(西湖太子湾店) ¥2293、杭州三台山庄 ¥3889 等候选因超出 max_plan_b_extra_cost_cny=500 已被排除，未列入 options。",
+    "所有候选均来自 flyai search-hotel 实时返回，未做任何预订或支付操作。",
+    "jumpUrl 使用工具返回的 detailUrl 字段（search-hotel 的预订链接映射规则）。",
+    "价格字段原样来自工具返回的 price（如 \"¥135\"），解析为整数 CNY；本次 6 个候选均有价格返回，无 null 值。若后续复查无价，则必须写 null 而非估算。",
+    "同一酒店在不同查询调用中返回的 detailUrl 短链可能不同（例：如家精选仅出现在 --hotel-types 酒店 那次调用），此处记录的是实际命中那一次的 URL。",
+    "工具未返回真实评分（score/review 字段在本次结果中为空或未提供），因此未展示评分信息——标注为“未查询到”。",
+    "工具未返回退改政策与含税明细，价格仅为列表展示价，最终以下单页为准——标注为“未查询到”。",
+    "protected_event_ids（hotel-west-lake、train-sh-hz）未被读取修改，本文件仅新增候选，不含对既有订单的任何变更指令。",
+    "按要求未重复执行景点（search-poi）查询。",
+    "杭州七居民宿(西湖太子湾店) ¥2293、杭州三台山庄 ¥3889 等候选因超出 max_plan_b_extra_cost_cny=500 已被排除，未列入 options。"
+  ],
+  "additive_candidates": {
+    "date_consistency:missing_accommodation_nights": {
+      "risk_id": "date_consistency:missing_accommodation_nights",
+      "risk_type": "date_consistency",
+      "issue": "行程存在 2026-10-19 夜间活动但当日无住宿覆盖（第二晚缺失）",
+      "fix_action": "add_only",
+      "modifies_existing_events": false,
+      "protected_event_ids_untouched": [
+        "hotel-west-lake",
+        "train-sh-hz"
+      ],
+      "required_night": {
+        "check_in": "2026-10-19",
+        "check_out": "2026-10-20"
+      },
+      "city": "杭州",
+      "preferred_area": "西湖",
+      "extra_cost_basis": "extra_cost_cny = 该房晚价格（第二晚为纯增量支出，不改动已有订单）",
+      "options": [
+        {
+          "name": "如家精选-杭州西湖景区苏堤店",
+          "jumpUrl": "https://router.feizhu.com/multi/webview?url=https%3A%2F%2Frouter.feizhu.com%2Fws%2F1o2mzR",
+          "detailUrl": "https://router.feizhu.com/multi/webview?url=https%3A%2F%2Frouter.feizhu.com%2Fws%2F1o2mzR",
+          "price_cny": 135,
+          "extra_cost_cny": 135,
+          "source": "flyai",
+          "shId": "67317444",
+          "star_level": "舒适型",
+          "brandName": "首旅如家",
+          "address": "虎跑路四眼井118号（近灵隐寺和杭州满陇桂雨公园）",
+          "interestsPoi": "近杭州少年儿童公园",
+          "latitude": "30.21577",
+          "longitude": "120.13653",
+          "decorationTime": "2020",
+          "mainPic": "https://img.alicdn.com/imgextra/i1/O1CN014n8fmK1Y9q4cVKKjT_!!4611686018427382729-0-fliggy_content_upload_image.jpg",
+          "check_in_date": "2026-10-19",
+          "check_out_date": "2026-10-20",
+          "nights": 1,
+          "within_plan_b_extra_cost_limit": true
+        },
+        {
+          "name": "桔子杭州西湖虎跑路酒店",
+          "jumpUrl": "https://router.feizhu.com/multi/webview?url=https%3A%2F%2Frouter.feizhu.com%2Fws%2F0Pto4W",
+          "detailUrl": "https://router.feizhu.com/multi/webview?url=https%3A%2F%2Frouter.feizhu.com%2Fws%2F0Pto4W",
+          "price_cny": 210,
+          "extra_cost_cny": 210,
+          "source": "flyai",
+          "shId": "56214473",
+          "star_level": "舒适型",
+          "brandName": null,
+          "address": "虎跑路47号",
+          "interestsPoi": "近杭州少年儿童公园",
+          "latitude": "30.2156",
+          "longitude": "120.136",
+          "decorationTime": "2018",
+          "mainPic": "https://img.alicdn.com/imgextra/i4/O1CN01H25ev7oyq4L37MB6_!!4611686018427385407-0-fliggy_content_upload_image.jpg",
+          "check_in_date": "2026-10-19",
+          "check_out_date": "2026-10-20",
+          "nights": 1,
+          "within_plan_b_extra_cost_limit": true
+        },
+        {
+          "name": "杭州了凡酒店(西湖风景区雷峰塔店）",
+          "jumpUrl": "https://router.feizhu.com/multi/webview?url=https%3A%2F%2Frouter.feizhu.com%2Fws%2F3tehhN",
+          "detailUrl": "https://router.feizhu.com/multi/webview?url=https%3A%2F%2Frouter.feizhu.com%2Fws%2F3tehhN",
+          "price_cny": 319,
+          "extra_cost_cny": 319,
+          "source": "flyai",
+          "shId": "87078459",
+          "star_level": "舒适型",
+          "brandName": null,
+          "address": "杭州西湖区三台山路89号",
+          "interestsPoi": "近太子湾公园",
+          "latitude": "30.227562",
+          "longitude": "120.133328",
+          "decorationTime": "2025-09-22",
+          "mainPic": "https://img.alicdn.com/imgextra/i3/6000000005157/O1CN01Tm10cp1nxxafQ8BxG_!!6000000005157-0-hotel.jpg",
+          "check_in_date": "2026-10-19",
+          "check_out_date": "2026-10-20",
+          "nights": 1,
+          "within_plan_b_extra_cost_limit": true
+        },
+        {
+          "name": "无它心舍(杭州西湖店)",
+          "jumpUrl": "https://router.feizhu.com/multi/webview?url=https%3A%2F%2Frouter.feizhu.com%2Fws%2F3VD7oU",
+          "detailUrl": "https://router.feizhu.com/multi/webview?url=https%3A%2F%2Frouter.feizhu.com%2Fws%2F3VD7oU",
+          "price_cny": 349,
+          "extra_cost_cny": 349,
+          "source": "flyai",
+          "shId": "53239002",
+          "star_level": "舒适型",
+          "brandName": null,
+          "address": "浙江省杭州市西湖区满觉陇路上满觉陇59号",
+          "interestsPoi": "近杭州少年儿童公园",
+          "latitude": "30.21664",
+          "longitude": "120.122364",
+          "decorationTime": "2017",
+          "mainPic": "https://img.alicdn.com/imgextra/i4/6000000006745/O1CN01QwVbCQ1zhG5qPigqU_!!6000000006745-0-hotel.jpg",
+          "check_in_date": "2026-10-19",
+          "check_out_date": "2026-10-20",
+          "nights": 1,
+          "within_plan_b_extra_cost_limit": true
+        },
+        {
+          "name": "一山一墅·在西湖美宿",
+          "jumpUrl": "https://router.feizhu.com/multi/webview?url=https%3A%2F%2Frouter.feizhu.com%2Fws%2F1EJheL",
+          "detailUrl": "https://router.feizhu.com/multi/webview?url=https%3A%2F%2Frouter.feizhu.com%2Fws%2F1EJheL",
+          "price_cny": 143,
+          "extra_cost_cny": 143,
+          "source": "flyai",
+          "shId": "12649497",
+          "star_level": "舒适型",
+          "brandName": null,
+          "address": "虎跑路四眼井69号。近苏堤、雷峰塔、南宋御街、宋城千古情等景点",
+          "interestsPoi": "近杭州少年儿童公园",
+          "latitude": "30.218268",
+          "longitude": "120.135546",
+          "decorationTime": "2024-12-26",
+          "mainPic": "https://img.alicdn.com/imgextra/i2/6000000002151/O1CN01ceWe2H1RlCy1lbfKh_!!6000000002151-0-hotel.jpg",
+          "check_in_date": "2026-10-19",
+          "check_out_date": "2026-10-20",
+          "nights": 1,
+          "within_plan_b_extra_cost_limit": true
+        },
+        {
+          "name": "花妖钱塘酒店(杭州西湖湖滨定安路地铁站店)",
+          "jumpUrl": "https://router.feizhu.com/multi/webview?url=https%3A%2F%2Frouter.feizhu.com%2Fws%2F1I5rOb",
+          "detailUrl": "https://router.feizhu.com/multi/webview?url=https%3A%2F%2Frouter.feizhu.com%2Fws%2F1I5rOb",
+          "price_cny": 78,
+          "extra_cost_cny": 78,
+          "source": "flyai",
+          "shId": "83420069",
+          "star_level": "经济型",
+          "brandName": null,
+          "address": "杭州上城区延安路135号涌金广场三楼",
+          "interestsPoi": "近杭州西湖风景名胜区",
+          "latitude": "30.246808",
+          "longitude": "120.163454",
+          "decorationTime": null,
+          "mainPic": "https://img.alicdn.com/imgextra/i1/6000000007603/O1CN0186s2ui262EKcynkmf_!!6000000007603-0-hotel.jpg",
+          "check_in_date": "2026-10-19",
+          "check_out_date": "2026-10-20",
+          "nights": 1,
+          "within_plan_b_extra_cost_limit": true
+        }
+      ],
+      "recommended_option": "如家精选-杭州西湖景区苏堤店",
+      "recommendation_reason": "连锁品牌（首旅如家）、位置近苏堤/西湖风景名胜区、¥135 单晚增量为最低价档中品质最稳的选择，远低于 max_plan_b_extra_cost_cny=500"
+    }
+  }
+}

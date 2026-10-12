@@ -1,0 +1,37 @@
+{
+  "evidence_version": 1,
+  "deployment_name": "Stage 6 Amap Maps MCP-部署",
+  "deployment_id": "depl_01M4R4TCERX73JTCNADW29TQEV",
+  "run_id": "drun_01M4R4Y3ZASPAYRZJKTVQTDXEN",
+  "session_id": "sesn_01M4R4Y400YC8TVK45565E6DCP",
+  "trigger": "manual",
+  "status": "succeeded",
+  "stop_reason": "end_turn",
+  "session_status": "idle",
+  "started_at": "2026-10-12T21:30:50+08:00",
+  "finished_at": "2026-10-12T21:32:27+08:00",
+  "duration_seconds": 97,
+  "agent": "triptwin-sentinel",
+  "model": "qwen3.8-flash",
+  "observed_tools": [
+    "activate_skill",
+    "read_skill_file",
+    "bash",
+    "maps_text_search",
+    "maps_around_search",
+    "maps_distance",
+    "maps_direction_transit_integrated"
+  ],
+  "observed_integrations": [
+    "Amap Maps MCP",
+    "FlyAI skill/CLI"
+  ],
+  "new_risks": "首次基线巡检，未计算跨次差异",
+  "resolved_risks": "首次基线巡检，未计算跨次差异",
+  "verification": {
+    "source": "百炼 Managed Agent Deployment 控制台（用户提供截图）",
+    "final_event": "session_status",
+    "model_error_observed": false,
+    "notes": "控制台最终显示 stop_reason=end_turn、session_status=idle；报告消息于 21:32:26 生成。运行成功由正常终止事件判定。"
+  }
+}

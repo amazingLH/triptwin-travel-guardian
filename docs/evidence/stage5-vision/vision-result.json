@@ -1,0 +1,231 @@
+{
+  "generated_at": "2026-10-12T17:22:46.062901+08:00",
+  "model": "qwen3.8-flash",
+  "request_id": "17e9bf47-9ff1-98fd-9586-e49690facf41",
+  "usage": {
+    "prompt_tokens": 2194,
+    "total_tokens": 3828,
+    "completion_tokens": 1634,
+    "prompt_tokens_details": {
+      "cached_tokens": 2048,
+      "image_tokens": 1741,
+      "text_tokens": 453
+    },
+    "completion_tokens_details": {}
+  },
+  "image": "assets/hangzhou-golden-itinerary.png",
+  "field_count": 47,
+  "field_accuracy": 0.9787234042553191,
+  "mismatches": [
+    {
+      "field": "events[3].walking_minutes",
+      "expected": 10,
+      "actual": 0
+    }
+  ],
+  "field_confidence": {
+    "trip.start": 1.0,
+    "trip.end": 1.0,
+    "trip.constraints.budget_cny": 1.0,
+    "trip.events[0].title": 1.0,
+    "trip.events[0].start": 1.0,
+    "trip.events[0].end": 1.0,
+    "trip.events[0].cost_cny": 1.0,
+    "trip.events[1].title": 1.0,
+    "trip.events[1].start": 1.0,
+    "trip.events[1].end": 1.0,
+    "trip.events[1].cost_cny": 1.0,
+    "trip.events[2].title": 1.0,
+    "trip.events[2].start": 1.0,
+    "trip.events[2].end": 1.0,
+    "trip.events[2].cost_cny": 1.0,
+    "trip.events[3].title": 1.0,
+    "trip.events[3].start": 1.0,
+    "trip.events[3].end": 1.0,
+    "trip.events[3].cost_cny": 1.0,
+    "trip.events[4].title": 1.0,
+    "trip.events[4].start": 1.0,
+    "trip.events[4].end": 1.0,
+    "trip.events[4].cost_cny": 1.0
+  },
+  "low_confidence_fields": [],
+  "notes": [],
+  "trip": {
+    "trip_id": "hangzhou-golden-001",
+    "version": "1.0",
+    "title": "杭州2日行程",
+    "start": "2026-10-18T08:00:00+08:00",
+    "end": "2026-10-20T18:00:00+08:00",
+    "travelers": {
+      "adults": 1,
+      "children": 0,
+      "seniors": 1,
+      "mobility_limitations": [
+        "膝关节不适，减少步行和换乘"
+      ]
+    },
+    "constraints": {
+      "budget_cny": "1900",
+      "max_plan_b_extra_cost_cny": "500",
+      "minimum_connection_buffer_minutes": 20,
+      "max_daily_walk_minutes": 60,
+      "max_daily_activities": 3,
+      "max_transfers_per_leg": 1,
+      "protected_event_ids": [
+        "hotel-west-lake",
+        "train-sh-hz"
+      ],
+      "preferences": [],
+      "avoidances": []
+    },
+    "events": [
+      {
+        "id": "train-sh-hz",
+        "event_type": "transport",
+        "title": "上海至杭州高铁",
+        "start": "2026-10-18T08:30:00+08:00",
+        "end": "2026-10-18T10:00:00+08:00",
+        "origin": {
+          "name": "上海虹桥站",
+          "city": "上海",
+          "latitude": null,
+          "longitude": null
+        },
+        "destination": {
+          "name": "杭州东站",
+          "city": "杭州",
+          "latitude": null,
+          "longitude": null
+        },
+        "location": null,
+        "cost_cny": "150",
+        "source": "user",
+        "confidence": 1.0,
+        "depends_on": [],
+        "transfer_from_event_id": null,
+        "travel_minutes_from_previous": null,
+        "connection_buffer_minutes": null,
+        "walking_minutes": 5,
+        "transfer_count": 0,
+        "proposed_extra_cost_cny": "0",
+        "weather_sensitive": false,
+        "metadata": {
+          "status": "受保护"
+        }
+      },
+      {
+        "id": "west-lake-boat",
+        "event_type": "activity",
+        "title": "西湖游船预约",
+        "start": "2026-10-18T10:35:00+08:00",
+        "end": "2026-10-18T11:35:00+08:00",
+        "origin": null,
+        "destination": null,
+        "location": {
+          "name": "西湖少年宫码头",
+          "city": "杭州",
+          "latitude": null,
+          "longitude": null
+        },
+        "cost_cny": "80",
+        "source": "user",
+        "confidence": 1.0,
+        "depends_on": [],
+        "transfer_from_event_id": null,
+        "travel_minutes_from_previous": 45,
+        "connection_buffer_minutes": null,
+        "walking_minutes": 20,
+        "transfer_count": 1,
+        "proposed_extra_cost_cny": "0",
+        "weather_sensitive": false,
+        "metadata": {}
+      },
+      {
+        "id": "zhejiang-museum",
+        "event_type": "activity",
+        "title": "浙江省博物馆参观",
+        "start": "2026-10-18T13:00:00+08:00",
+        "end": "2026-10-18T15:00:00+08:00",
+        "origin": null,
+        "destination": null,
+        "location": {
+          "name": "孤山馆区",
+          "city": "杭州",
+          "latitude": null,
+          "longitude": null
+        },
+        "cost_cny": "0",
+        "source": "user",
+        "confidence": 1.0,
+        "depends_on": [],
+        "transfer_from_event_id": null,
+        "travel_minutes_from_previous": null,
+        "connection_buffer_minutes": null,
+        "walking_minutes": 45,
+        "transfer_count": 1,
+        "proposed_extra_cost_cny": "0",
+        "weather_sensitive": false,
+        "metadata": {}
+      },
+      {
+        "id": "hotel-west-lake",
+        "event_type": "accommodation",
+        "title": "西湖附近酒店",
+        "start": "2026-10-18T15:00:00+08:00",
+        "end": "2026-10-19T11:00:00+08:00",
+        "origin": null,
+        "destination": null,
+        "location": {
+          "name": "西湖附近合成酒店",
+          "city": "杭州",
+          "latitude": null,
+          "longitude": null
+        },
+        "cost_cny": "900",
+        "source": "user",
+        "confidence": 1.0,
+        "depends_on": [],
+        "transfer_from_event_id": null,
+        "travel_minutes_from_previous": null,
+        "connection_buffer_minutes": null,
+        "walking_minutes": 0,
+        "transfer_count": 0,
+        "proposed_extra_cost_cny": "0",
+        "weather_sensitive": false,
+        "metadata": {
+          "nights": 1,
+          "status": "受保护"
+        }
+      },
+      {
+        "id": "longjing-hike",
+        "event_type": "activity",
+        "title": "龙井村户外徒步",
+        "start": "2026-10-19T14:00:00+08:00",
+        "end": "2026-10-19T17:00:00+08:00",
+        "origin": null,
+        "destination": null,
+        "location": {
+          "name": "龙井村",
+          "city": "杭州",
+          "latitude": null,
+          "longitude": null
+        },
+        "cost_cny": "300",
+        "source": "user",
+        "confidence": 1.0,
+        "depends_on": [],
+        "transfer_from_event_id": null,
+        "travel_minutes_from_previous": null,
+        "connection_buffer_minutes": null,
+        "walking_minutes": 90,
+        "transfer_count": 2,
+        "proposed_extra_cost_cny": "600",
+        "weather_sensitive": false,
+        "metadata": {}
+      }
+    ],
+    "risks": []
+  },
+  "contains_real_personal_information": false
+}
