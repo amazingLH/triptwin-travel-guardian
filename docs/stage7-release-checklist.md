@@ -14,7 +14,8 @@
 
 - [x] 创建 GitHub Public 仓库 `triptwin-travel-guardian`。
 - [x] 通过暂存区密钥扫描后推送至 `https://github.com/amazingLH/triptwin-travel-guardian`。
-- [ ] 创建公开 ModelScope Gradio 创空间 `TripTwin-Travel-Guardian`。
+- [x] 创建公开 ModelScope 创空间 `L666H666Better/triptwin-travel-guardian`。
+- [x] 合并平台生成的卡片元数据并将完整代码推送至 ModelScope `master` 分支。
 - [ ] 在 Secret/密钥区配置 5 项变量；不得写入公开变量或仓库。
 - [ ] 等待构建成功并记录公网 URL。
 - [ ] 无痕窗口完整闭环连续运行 3 次。
