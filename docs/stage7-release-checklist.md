@@ -12,8 +12,8 @@
 
 ## 等待平台操作
 
-- [ ] 创建空白 GitHub Public 仓库 `triptwin-travel-guardian`，不自动生成 README。
-- [ ] 将仓库 URL 交给本地发布流程，检查暂存文件后再推送。
+- [x] 创建 GitHub Public 仓库 `triptwin-travel-guardian`。
+- [x] 通过暂存区密钥扫描后推送至 `https://github.com/amazingLH/triptwin-travel-guardian`。
 - [ ] 创建公开 ModelScope Gradio 创空间 `TripTwin-Travel-Guardian`。
 - [ ] 在 Secret/密钥区配置 5 项变量；不得写入公开变量或仓库。
 - [ ] 等待构建成功并记录公网 URL。

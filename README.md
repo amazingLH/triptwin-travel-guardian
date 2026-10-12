@@ -2,7 +2,7 @@
 
 TripTwin 将零散行程解析为结构化 `TripGraph`，使用确定性规则发现时间、日期、预算、体力和天气风险，再基于飞猪旅行真实候选生成可验证的 Plan B。它只做风险提示与候选推荐，**不会自动预订或支付**。
 
-> 当前状态：Stage 1–6 已完成；公网 Demo 与 GitHub 地址将在 Stage 7 发布后补充。
+> 当前状态：Stage 1–6 已完成；[GitHub 公共仓库](https://github.com/amazingLH/triptwin-travel-guardian)已发布，ModelScope 公网 Demo 正在部署。
 
 ## 作品亮点
 
