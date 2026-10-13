@@ -34,6 +34,15 @@ def test_golden_demo_closes_the_p0_loop() -> None:
     assert result["protected_untouched"] is True
 
 
+def test_loading_example_marks_chat_as_deterministic() -> None:
+    import app
+
+    image, _, state = app.load_example()
+
+    assert Path(image) == SAMPLE_IMAGE_PATH
+    assert state == {"trip_source": "synthetic_example"}
+
+
 def test_golden_demo_is_repeatable_three_times() -> None:
     runs = [run_golden_demo() for _ in range(3)]
     assert runs[0] == runs[1] == runs[2]

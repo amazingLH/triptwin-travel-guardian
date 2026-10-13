@@ -67,8 +67,12 @@ APP_CSS = """
 """
 
 
-def load_example() -> tuple[str, str]:
-    return str(SAMPLE_IMAGE_PATH), "✅ 已载入完全虚构的黄金案例，无真实个人信息。"
+def load_example() -> tuple[str, str, dict[str, str]]:
+    return (
+        str(SAMPLE_IMAGE_PATH),
+        "✅ 已载入完全虚构的黄金案例，无真实个人信息。",
+        {"trip_source": "synthetic_example"},
+    )
 
 
 def build_twin(image_path: str | None) -> tuple[Any, list[list[Any]], str, str, dict[str, Any]]:
@@ -640,8 +644,9 @@ def create_app() -> gr.Blocks:
             outputs=[*session_outputs, *view_outputs],
         )
         load_event = load_button.click(
-            load_example, outputs=[image, status], api_name="load_example"
+            load_example, outputs=[image, status, state], api_name="load_example"
         )
+        image.upload(lambda: {}, outputs=state, api_name=False)
         load_event.then(
             persist_current_session,
             inputs=session_inputs,
