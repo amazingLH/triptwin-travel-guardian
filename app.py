@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import sys
 from pathlib import Path
@@ -38,6 +39,13 @@ from triptwin.session_history import (
     switch_session,
 )
 from triptwin.vision_parser import extract_trip_from_image
+from triptwin.usage_guard import (
+    browser_can_consume,
+    browser_limits,
+    consume_browser,
+    global_limits,
+    reserve_global,
+)
 
 
 DISCLAIMER = (
@@ -54,6 +62,8 @@ APP_CSS = """
 .guide-card h3 {color:#7a4b00;margin-top:0}.guide-card p,.guide-card li {color:#694c20}
 .chat-panel {border:1px solid #c7d7f4;border-radius:16px;background:#f8fbff;padding:8px}
 .session-bar {border:1px solid #d9e2f2;border-radius:14px;background:#f8fafc;padding:10px 14px}
+.quota-card {background:#fff7ed;border:1px solid #fdba74;border-radius:14px;padding:12px 16px;color:#7c2d12}
+.quota-card b {color:#9a3412}
 """
 
 
@@ -93,6 +103,33 @@ def build_twin(image_path: str | None) -> tuple[Any, list[list[Any]], str, str, 
     }
     status = f"✅ `{model}` 图片解析完成；{request_note}。"
     return trip_payload, rows, low_text, timeline_html(trip_payload), state
+
+
+def build_twin_guarded(
+    image_path: str | None, browser_store: dict[str, Any] | None
+) -> tuple[Any, list[list[Any]], str, str, dict[str, Any], dict[str, Any]]:
+    """Apply browser/global limits only to real user-uploaded image calls."""
+
+    if not image_path:
+        raise gr.Error("请先上传图片或点击“载入合成示例”。")
+    image_path_obj = Path(image_path).resolve()
+    store, _ = ensure_active_session(browser_store)
+    if not _same_image(image_path_obj, SAMPLE_IMAGE_PATH):
+        allowed, usage = browser_can_consume(store.get("usage"), "images")
+        if not allowed:
+            raise gr.Error(
+                f"为保护有限 Token，每个浏览器每天最多解析 "
+                f"{browser_limits()['images']} 张自行上传的图片；请明日再试。"
+            )
+        globally_allowed, _, global_limit = reserve_global("images")
+        if not globally_allowed:
+            raise gr.Error(
+                f"今日全站图片解析已达到 {global_limit} 次；"
+                "合成示例、风险检查和 Plan B 仍可正常体验。"
+            )
+        store["usage"] = consume_browser(usage, "images")
+    result = build_twin(image_path)
+    return *result, store
 
 
 def _same_image(first: Path, second: Path) -> bool:
@@ -142,6 +179,94 @@ def answer_question(
         answer = "当前模型服务暂时不可用，请稍后重试；TripGraph 和已生成的 Plan B 不受影响。"
     conversation.append({"role": "assistant", "content": answer})
     return "", conversation
+
+
+def answer_question_guarded(
+    question: str,
+    history: list[dict[str, Any]] | None,
+    state: dict[str, Any],
+    browser_store: dict[str, Any] | None,
+) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
+    """Answer with browser caching and bounded daily public model usage."""
+
+    text = (question or "").strip()
+    if not text:
+        raise gr.Error("请先输入问题。")
+    trip_payload = (
+        state["trip"]
+        if state and isinstance(state.get("trip"), dict)
+        else load_cached_vision()["trip"]
+    )
+    store, _ = ensure_active_session(browser_store)
+    cache_key = _answer_cache_key(text, trip_payload)
+    cached = store.get("answer_cache", {}).get(cache_key)
+    if isinstance(cached, str) and cached.strip():
+        conversation = list(history or [])
+        conversation.extend(
+            [
+                {"role": "user", "content": text},
+                {"role": "assistant", "content": cached},
+            ]
+        )
+        return "", conversation, store
+
+    allowed, usage = browser_can_consume(store.get("usage"), "questions")
+    if not allowed:
+        return _quota_answer(
+            text,
+            history,
+            f"每个浏览器每天最多 {browser_limits()['questions']} 次自由问答",
+            store,
+        )
+    globally_allowed, _, global_limit = reserve_global("questions")
+    if not globally_allowed:
+        return _quota_answer(
+            text,
+            history,
+            f"今日全站自由问答已达到 {global_limit} 次",
+            store,
+        )
+
+    _, conversation = answer_question(text, history, state)
+    store["usage"] = consume_browser(usage, "questions")
+    answer = conversation[-1].get("content") if conversation else None
+    if isinstance(answer, str) and answer.strip():
+        cache = dict(store.get("answer_cache") or {})
+        cache[cache_key] = answer
+        store["answer_cache"] = dict(list(cache.items())[-50:])
+    return "", conversation, store
+
+
+def _answer_cache_key(question: str, trip_payload: dict[str, Any]) -> str:
+    normalized_question = " ".join(question.casefold().split())
+    payload = json.dumps(
+        trip_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    return hashlib.sha256(
+        (normalized_question + "\n" + payload).encode("utf-8")
+    ).hexdigest()
+
+
+def _quota_answer(
+    question: str,
+    history: list[dict[str, Any]] | None,
+    reason: str,
+    store: dict[str, Any],
+) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
+    conversation = list(history or [])
+    conversation.extend(
+        [
+            {"role": "user", "content": question},
+            {
+                "role": "assistant",
+                "content": (
+                    f"{reason}，为避免免费 Token 被耗尽，本次不再调用模型。"
+                    "合成示例、风险检查和 Plan B 仍可继续使用。"
+                ),
+            },
+        ]
+    )
+    return "", conversation, store
 
 
 def _session_snapshot(
@@ -334,6 +459,14 @@ def create_app() -> gr.Blocks:
             ),
         )
         gr.HTML("<div class='hero'><h1>TripTwin 旅行数字孪生守护者</h1><p>把行程截图变成 TripGraph，结合真实 FlyAI 与高德 MCP 证据发现衔接、日期、预算、天气和体力风险，并生成可验证 Plan B。</p></div>")
+        gr.HTML(
+            "<div class='quota-card'><b>免费额度保护说明：</b>本站使用有限的百炼免费 Token。"
+            f"每个浏览器每天最多 {browser_limits()['questions']} 次自由问答、"
+            f"{browser_limits()['images']} 次自行上传图片解析；"
+            f"全站每天最多 {global_limits()['questions']} 次自由问答、"
+            f"{global_limits()['images']} 次图片解析。重复问题会复用缓存。"
+            "达到限制后，合成示例、风险检查和 Plan B 仍可正常体验。</div>"
+        )
         gr.Markdown(f"> **隐私与服务声明：** {DISCLAIMER}")
         with gr.Row(elem_classes=["session-bar"]):
             with gr.Column(scale=3):
@@ -451,10 +584,17 @@ def create_app() -> gr.Blocks:
             outputs=session_outputs,
         )
         build_event = build_button.click(
-            build_twin,
-            inputs=[image],
-            outputs=[trip_json, confidence, low_confidence, timeline, state],
-            api_name="build_twin",
+            build_twin_guarded,
+            inputs=[image, browser_store],
+            outputs=[
+                trip_json,
+                confidence,
+                low_confidence,
+                timeline,
+                state,
+                browser_store,
+            ],
+            api_name=False,
         ).then(lambda: "✅ TripGraph 已构建。", outputs=status)
         build_event.then(
             persist_current_session,
@@ -503,10 +643,10 @@ def create_app() -> gr.Blocks:
             outputs=session_outputs,
         )
         ask_event = ask_button.click(
-            answer_question,
-            inputs=[question, chatbot, state],
-            outputs=[question, chatbot],
-            api_name="ask_triptwin",
+            answer_question_guarded,
+            inputs=[question, chatbot, state, browser_store],
+            outputs=[question, chatbot, browser_store],
+            api_name=False,
         )
         ask_event.then(
             persist_current_session,
@@ -514,9 +654,10 @@ def create_app() -> gr.Blocks:
             outputs=session_outputs,
         )
         submit_event = question.submit(
-            answer_question,
-            inputs=[question, chatbot, state],
-            outputs=[question, chatbot],
+            answer_question_guarded,
+            inputs=[question, chatbot, state, browser_store],
+            outputs=[question, chatbot, browser_store],
+            api_name=False,
         )
         submit_event.then(
             persist_current_session,

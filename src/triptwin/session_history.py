@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
+from triptwin.usage_guard import normalize_browser_usage
+
 
 STORE_VERSION = 1
 MAX_SESSIONS = 20
@@ -26,6 +28,8 @@ def ensure_store(value: Any) -> dict[str, Any]:
         "version": STORE_VERSION,
         "active_id": active_id,
         "sessions": copy.deepcopy(safe_sessions),
+        "usage": normalize_browser_usage(value.get("usage")),
+        "answer_cache": _sanitize_answer_cache(value.get("answer_cache")),
     }
 
 
@@ -155,3 +159,17 @@ def _valid_session(value: Any) -> bool:
         and value["id"].startswith("tts_")
         and isinstance(value.get("snapshot"), dict)
     )
+
+
+def _sanitize_answer_cache(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    items = [
+        (str(key), str(answer))
+        for key, answer in value.items()
+        if isinstance(key, str)
+        and len(key) == 64
+        and isinstance(answer, str)
+        and answer.strip()
+    ]
+    return dict(items[-50:])

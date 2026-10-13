@@ -66,3 +66,49 @@ def test_chat_uses_contextual_model_answer(monkeypatch) -> None:
     assert history[-2] == {"role": "user", "content": "是否会自动预定？"}
     assert history[-1]["role"] == "assistant"
     assert "不会自动预定" in history[-1]["content"]
+
+
+def test_public_chat_reuses_browser_cache_without_second_model_call(monkeypatch) -> None:
+    import app
+
+    calls = {"count": 0}
+
+    def fake_answer(question, context):
+        calls["count"] += 1
+        return "不会自动预定；只提供已验证候选。"
+
+    monkeypatch.setattr(app, "answer_with_trip_context", fake_answer)
+    monkeypatch.setattr(app, "reserve_global", lambda kind: (True, 1, 25))
+    state = {"trip": load_cached_vision()["trip"]}
+
+    _, history, store = app.answer_question_guarded(
+        "是否会自动预定？", [], state, None
+    )
+    _, repeated_history, repeated_store = app.answer_question_guarded(
+        " 是否会自动预定？ ", history, state, store
+    )
+
+    assert calls["count"] == 1
+    assert repeated_store["usage"]["questions"] == 1
+    assert repeated_history[-1]["content"] == history[-1]["content"]
+
+
+def test_public_chat_stops_after_browser_daily_limit(monkeypatch) -> None:
+    import app
+    from triptwin.usage_guard import current_day
+
+    monkeypatch.setenv("TRIPTWIN_BROWSER_QUESTION_LIMIT", "3")
+    store = {
+        "version": 1,
+        "active_id": None,
+        "sessions": [],
+        "usage": {"date": current_day(), "questions": 3, "images": 0},
+        "answer_cache": {},
+    }
+
+    _, history, returned_store = app.answer_question_guarded(
+        "还能继续问吗？", [], {"trip": load_cached_vision()["trip"]}, store
+    )
+
+    assert "每天最多 3 次自由问答" in history[-1]["content"]
+    assert returned_store["usage"]["questions"] == 3
