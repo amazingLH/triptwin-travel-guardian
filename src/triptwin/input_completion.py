@@ -106,7 +106,10 @@ def confirm_draft(payload: dict, rows: list[list[Any]]) -> Trip:
         seen.add(path)
         value = str(row[2]).strip() if row[2] is not None else ""
         if not value or value in {"null", "待确认"}:
-            raise ValueError("请补充：" + str(row[1]))
+            if path == "constraints.budget_cny":
+                raise ValueError("请输入总预算：在表格第一行“总预算”的填写值中输入金额（例如 2000），然后再次点击确认。Plan B 最大新增费用是另一项，不能代替总预算。")
+            label = str(row[1]).split("（", 1)[0]
+            raise ValueError(f"请输入{label}：在对应行的“填写值”中补充信息，然后再次点击确认。")
         try:
             parsed = json.loads(value)
         except (ValueError, TypeError):
@@ -128,7 +131,16 @@ def confirm_draft(payload: dict, rows: list[list[Any]]) -> Trip:
         from datetime import datetime
         result["start"] = min((e["start"] for e in events), key=datetime.fromisoformat)
         result["end"] = max((e["end"] for e in events), key=datetime.fromisoformat)
-    trip = Trip.model_validate(result)
+    try:
+        trip = Trip.model_validate(result)
+    except ValidationError as exc:
+        error = exc.errors()[0]
+        loc = error["loc"]
+        key = str(loc[-1]) if loc else ""
+        if key == "budget_cny":
+            raise ValueError("请输入有效的总预算：金额必须大于 0，只填数字，例如 2000。") from None
+        label = LABELS.get(key, "行程信息")
+        raise ValueError(f"请检查{label}：填写值的格式或范围不正确。日期时间请填写为 2026-10-20T20:16:00+08:00；数量和金额只填数字。") from None
     if trip.constraints.budget_cny is None:
         raise ValueError("请填写总预算后再构建。")
     return trip

@@ -427,6 +427,8 @@ def completion_panel(state):
         "### 请补全并确认必要信息\n\n只编辑表格的“填写值”列。空白项为图片未提供的信息；预填规则和人数也请核对。"
         "填写后点击“确认信息并构建旅行数字孪生”。也可清空并重新上传更详细的行程截图。"
     )
+    if (state or {}).get("completion_error"):
+        message = "### ⚠️ " + state["completion_error"] + "\n\n" + message
     return gr.update(visible=True), (state or {}).get("completion_rows") or completion_rows(draft), message
 
 
@@ -438,10 +440,14 @@ def confirm_import(rows, state):
         trip = confirm_draft(current["draft_trip"], rows)
     except Exception as exc:
         current["completion_rows"] = rows
-        return "⚠️ 尚未构建：" + str(exc)[:700], "", current, "", False
+        message = str(exc)[:700]
+        current["completion_error"] = message
+        gr.Warning(message)
+        return "⚠️ " + message, "", current, "", False
     current["trip"] = trip.model_dump(mode="json")
     current.pop("draft_trip", None)
     current.pop("completion_rows", None)
+    current.pop("completion_error", None)
     current["stage"] = "ready"
     current["low_confidence_fields"] = []
     return (
@@ -480,6 +486,8 @@ def apply_tripgraph_edits(
 ) -> tuple[str, str, dict[str, Any], str, bool]:
     """Validate user corrections before replacing the active TripGraph."""
 
+    if not (trip_json_text or "").strip():
+        raise gr.Error("尚未生成行程。请先解析截图、补全必要信息，再点击“确认信息并构建旅行数字孪生”。")
     try:
         payload = json.loads(trip_json_text)
         from triptwin.models import Trip
@@ -1215,7 +1223,7 @@ def create_app() -> gr.Blocks:
                 )
                 confirm_import_button = gr.Button("确认信息并构建旅行数字孪生", variant="primary")
             timeline = gr.HTML(label="TripGraph 时间线")
-            with gr.Accordion("校对与修改 · 结构化行程", open=False):
+            with gr.Accordion("校对与修改 · 结构化行程", open=False, visible=False) as editor_section:
                 trip_json = gr.Code(
                     language="json",
                     label="结构化 TripGraph（可校对修改）",
@@ -1513,6 +1521,10 @@ def create_app() -> gr.Blocks:
             api_name=False,
         )
         state.change(completion_panel, inputs=state, outputs=[completion_section, completion_table, completion_message], api_name=False)
+        state.change(
+            lambda current: gr.update(visible=isinstance((current or {}).get("trip"), dict)),
+            inputs=state, outputs=editor_section, api_name=False,
+        )
     return demo
 
 
