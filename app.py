@@ -60,6 +60,8 @@ APP_CSS = """
 .timeline-time {color:#2563eb;font-weight:700}.timeline span{color:#667085}
 .guide-card {background:#fff8e8;border:1px solid #f3d28b;border-radius:14px;padding:14px 18px}
 .guide-card h3 {color:#7a4b00;margin-top:0}.guide-card p,.guide-card li {color:#694c20}
+.guide-title-row {display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.guide-title-row h3 {margin:0}.example-free-note {font-size:12px;color:#9a5b00}
 .chat-panel {border:1px solid #c7d7f4;border-radius:16px;background:#f8fbff;padding:8px}
 .session-bar {border:1px solid #d9e2f2;border-radius:14px;background:#f8fafc;padding:10px 14px}
 .quota-card {background:#fff7ed;border:1px solid #fdba74;border-radius:14px;padding:12px 16px;color:#7c2d12}
@@ -208,9 +210,9 @@ def answer_question_guarded(
     )
     store, _ = ensure_active_session(browser_store)
 
-    # The bundled golden case is fixed and fully verified. Its common showcase
-    # answers are local, but their first use still counts toward the browser's
-    # daily question allowance. Exact repeats continue to reuse the cache.
+    # The bundled golden case is fixed and fully verified. The four canonical
+    # showcase questions are quota-free; paraphrases still use the browser's
+    # daily allowance even when their answer can be resolved locally.
     deterministic_answer = _synthetic_example_answer(text, state)
     cache_key = _answer_cache_key(text, trip_payload)
     cached = store.get("answer_cache", {}).get(cache_key)
@@ -222,6 +224,19 @@ def answer_question_guarded(
                 {"role": "assistant", "content": cached},
             ]
         )
+        return "", conversation, store
+
+    if deterministic_answer is not None and _is_free_synthetic_question(text, state):
+        conversation = list(history or [])
+        conversation.extend(
+            [
+                {"role": "user", "content": text},
+                {"role": "assistant", "content": deterministic_answer},
+            ]
+        )
+        cache = dict(store.get("answer_cache") or {})
+        cache[cache_key] = deterministic_answer
+        store["answer_cache"] = dict(list(cache.items())[-50:])
         return "", conversation, store
 
     allowed, usage = browser_can_consume(store.get("usage"), "questions")
@@ -309,6 +324,27 @@ def _synthetic_example_answer(
             "路线和天气核验则来自高德地图 MCP。"
         )
     return None
+
+
+def _is_free_synthetic_question(
+    question: str, state: dict[str, Any] | None
+) -> bool:
+    if not isinstance(state, dict) or state.get("trip_source") != "synthetic_example":
+        return False
+    return _normalize_showcase_question(question) in {
+        "为什么存在衔接风险",
+        "第二晚推荐住哪里",
+        "是否会自动预定",
+        "候选数据来自哪里",
+    }
+
+
+def _normalize_showcase_question(question: str) -> str:
+    return "".join(
+        character
+        for character in question.casefold()
+        if character.isalnum() or "\u4e00" <= character <= "\u9fff"
+    )
 
 
 def _answer_cache_key(question: str, trip_payload: dict[str, Any]) -> str:
@@ -584,10 +620,13 @@ def create_app() -> gr.Blocks:
         inspect_button = gr.Button("⑤ 手动巡检", variant="secondary")
         with gr.Row():
             with gr.Column(scale=1, elem_classes=["guide-card"]):
+                gr.HTML(
+                    "<div class='guide-title-row'><h3>💡 演示操作提示</h3>"
+                    "<span class='example-free-note'>以下四个示例问题不消耗每日提问额度；"
+                    "请完整复制到“向 TripTwin 提问”中，以免改写后计入额度。</span></div>"
+                )
                 gr.Markdown(
-                    """### 💡 演示操作提示
-
-1. **载入合成示例**
+                    """1. **载入合成示例**
 2. **构建旅行数字孪生**
 3. **检查风险**
 4. **生成 Plan B**

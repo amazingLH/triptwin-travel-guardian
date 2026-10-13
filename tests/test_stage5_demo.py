@@ -104,7 +104,46 @@ def test_public_chat_reuses_browser_cache_without_second_model_call(monkeypatch)
     assert repeated_history[-1]["content"] == history[-1]["content"]
 
 
-def test_synthetic_common_question_uses_browser_quota_but_not_model(monkeypatch) -> None:
+def test_canonical_synthetic_questions_are_quota_free(monkeypatch) -> None:
+    import app
+
+    monkeypatch.setattr(
+        app,
+        "answer_with_trip_context",
+        lambda *_: (_ for _ in ()).throw(AssertionError("model must not be called")),
+    )
+    monkeypatch.setattr(
+        app,
+        "reserve_global",
+        lambda *_: (_ for _ in ()).throw(AssertionError("quota must not be used")),
+    )
+    state = {
+        "trip": load_cached_vision()["trip"],
+        "trip_source": "synthetic_example",
+    }
+
+    history = []
+    store = None
+    for question in (
+        "为什么存在衔接风险？",
+        "第二晚推荐住哪里？",
+        "是否会自动预定？",
+        "候选数据来自哪里？",
+    ):
+        _, history, store = app.answer_question_guarded(
+            question, history, state, store
+        )
+
+    assert store.get("usage", {}).get("questions", 0) == 0
+
+    _, repeated_history, repeated_store = app.answer_question_guarded(
+        " 是否会自动预定？ ", history, state, store
+    )
+    assert "不会替你预订" in repeated_history[-1]["content"]
+    assert repeated_store.get("usage", {}).get("questions", 0) == 0
+
+
+def test_paraphrased_synthetic_question_uses_browser_quota(monkeypatch) -> None:
     import app
 
     monkeypatch.setattr(
@@ -123,17 +162,11 @@ def test_synthetic_common_question_uses_browser_quota_but_not_model(monkeypatch)
     }
 
     _, history, store = app.answer_question_guarded(
-        "是否会自动预定？", [], state, None
+        "它会不会帮我自动预订？", [], state, None
     )
 
     assert "不会替你预订" in history[-1]["content"]
-    assert store.get("usage", {}).get("questions", 0) == 1
-
-    _, repeated_history, repeated_store = app.answer_question_guarded(
-        " 是否会自动预定？ ", history, state, store
-    )
-    assert repeated_history[-1]["content"] == history[-1]["content"]
-    assert repeated_store["usage"]["questions"] == 1
+    assert store["usage"]["questions"] == 1
 
 
 def test_uploaded_trip_common_question_still_uses_model(monkeypatch) -> None:
