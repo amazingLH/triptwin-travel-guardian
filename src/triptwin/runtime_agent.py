@@ -87,7 +87,8 @@ def run_live_trip(
         raise RuntimeError("高德 MCP 未返回可解析的公交路线，实时核验未通过。")
     if inspection.route.warning:
         raise RuntimeError(
-            "高德终点只匹配到行政区级坐标，请在 TripGraph 中改成更精确的 POI 后重试。"
+            f"未能精确定位“{destination_name}”。高德返回的是城市或区县范围，无法据此计算可靠衔接路线。"
+            "请在第 2 步把地点写成具体车站、酒店或景点名称（例如“大连站”，而不是“大连”），然后重试；本次工具额度已退还。"
         )
     if inspection.weather is None:
         raise RuntimeError("高德 MCP 未返回可解析的天气结果，实时核验未通过。")
@@ -146,7 +147,7 @@ def _place_name(event: TripEvent, *, prefer_destination: bool = False) -> str | 
     values = (
         (event.destination, event.location, event.origin)
         if prefer_destination
-        else (event.location, event.destination, event.origin)
+        else (event.location, event.origin, event.destination)
     )
     return next((value.name for value in values if value is not None), None)
 
@@ -168,7 +169,9 @@ def _live_prompt(
     amap_instruction = (
         "先使用高德地图 MCP 真实执行："
         f"(1) maps_geo 查询 {origin_name}；(2) maps_geo 查询 {destination_name}；"
-        "(3) 用精确坐标调用 maps_direction_transit_integrated；"
+        "同时必须 maps_text_search 搜索起点、终点的具体 POI，城市从下方 TripGraph 对应地点读取。"
+        "若 geo 返回区县/市/省，必须选择名称和城市匹配的 POI，使用其 location 坐标；不得使用行政区中心代替车站。"
+        "(3) 仅用这些精确 POI 坐标调用 maps_direction_transit_integrated；同站衔接不查询跨城公交；"
         f"(4) maps_weather 查询 {city}。不得估算或编造。"
     )
     return amap_instruction + "\n\n" + build_replanning_prompt(trip, analysis)

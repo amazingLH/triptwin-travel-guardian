@@ -129,6 +129,7 @@ def parse_amap_events(
     weather_payload: dict[str, Any] | None = None
     weather_event: dict[str, Any] | None = None
     tool_names: list[str] = []
+    poi_results: list[dict[str, Any]] = []
 
     for event, data in outputs:
         name = str(data.get("name") or "")
@@ -145,6 +146,11 @@ def parse_amap_events(
             route_payload, route_event = payload, event
         elif name == "maps_weather":
             weather_payload, weather_event = payload, event
+        elif name in {"maps_text_search", "maps_search_detail"}:
+            for key in ("pois", "results"):
+                items = payload.get(key)
+                if isinstance(items, list):
+                    poi_results.extend(item for item in items if isinstance(item, dict))
 
     geo_items: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for call_id, geo in geo_by_call.items():
@@ -152,6 +158,9 @@ def parse_amap_events(
         geo_items.append((call, geo))
     origin_geo = _match_geo(geo_items, origin_name, index=0)
     destination_geo = _match_geo(geo_items, destination_name, index=1)
+    if route_payload:
+        origin_geo = _precise_poi(poi_results, origin_name, route_payload.get("origin")) or origin_geo
+        destination_geo = _precise_poi(poi_results, destination_name, route_payload.get("destination")) or destination_geo
 
     route = _route_evidence(
         route_payload,
@@ -200,7 +209,7 @@ def apply_amap_evidence(
             metadata = {}
             event["metadata"] = metadata
 
-        location = event.get("location")
+        location = event.get("location") or event.get("origin")
         location_name = (
             str(location.get("name") or "") if isinstance(location, dict) else ""
         )
@@ -353,7 +362,7 @@ def _match_geo(
     *,
     index: int,
 ) -> dict[str, Any] | None:
-    for call, geo in items:
+    for call, geo in reversed(items):
         try:
             arguments = json.loads(str(call.get("arguments") or "{}"))
         except json.JSONDecodeError:
@@ -361,6 +370,25 @@ def _match_geo(
         if arguments.get("address") == name:
             return geo
     return items[index][1] if len(items) > index else None
+
+
+def _precise_poi(items, name, route_coordinates):
+    """Only accept a matching POI whose coordinates were actually routed."""
+    def coordinates(value):
+        try:
+            result = tuple(float(part) for part in str(value).split(","))
+            return result if len(result) == 2 else None
+        except ValueError:
+            return None
+    target = coordinates(route_coordinates)
+    if target is None:
+        return None
+    for item in items:
+        point = coordinates(item.get("location"))
+        title = str(item.get("name") or "")
+        if point and name and name in title and all(abs(a - b) < 0.00001 for a, b in zip(point, target)):
+            return {**item, "level": "POI"}
+    return None
 
 
 def _to_int(value: Any, default: int) -> int:

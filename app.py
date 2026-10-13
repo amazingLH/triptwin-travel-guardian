@@ -47,6 +47,7 @@ from triptwin.session_history import (
 from triptwin.runtime_agent import run_live_trip
 from triptwin.exporter import export_trip_files
 from triptwin.input_completion import completion_rows, cancelled_orders, confirm_draft
+from triptwin.functional_examples import example_kind, example_paths, example_trip, field_description
 from triptwin.vision_parser import extract_trip_from_images
 from triptwin.usage_guard import (
     browser_can_consume,
@@ -147,6 +148,11 @@ def load_example() -> tuple[list[str], str, dict[str, str]]:
         "✅ 已载入完全虚构的黄金案例，无真实个人信息。",
         {"trip_source": "synthetic_example"},
     )
+
+
+def load_railway_example(kind):
+    paths = example_paths(kind)
+    return [str(path) for path in paths], "已载入脱敏车票功能示例，请点击第 2 步。预算 2000 元、同行人数 1 人为演示设置。", {}
 
 
 def _sample_panel(markdown: str, title: str) -> str:
@@ -296,11 +302,22 @@ def _is_sample_upload(paths: list[Path]) -> bool:
     return len(paths) == 1 and _same_image(paths[0], SAMPLE_IMAGE_PATH)
 
 
+def _is_functional_example(paths):
+    return _is_sample_upload(paths) or example_kind(paths) is not None
+
+
 def build_twin(image_paths: Any) -> tuple[str, list[list[Any]], str, str, dict[str, Any]]:
     paths = _image_paths(image_paths)
     if not paths:
         raise gr.Error("请先上传图片或点击“载入合成示例”。")
-    if _is_sample_upload(paths):
+    kind = example_kind(paths)
+    if kind:
+        trip_payload = example_trip(kind)
+        confidence = {f"events[{i}].{key}": 1.0 for i in range(len(trip_payload["events"])) for key in ("title", "start", "end", "cost_cny")}
+        low_fields = []
+        model = "本地人工核对示例"
+        request_note = "复用脱敏车票示例，不调用模型；预算与人数为演示设置，工具证据保持未核验"
+    elif _is_sample_upload(paths):
         evidence = load_cached_vision()
         trip_payload = evidence["trip"]
         confidence = evidence["field_confidence"]
@@ -318,7 +335,7 @@ def build_twin(image_paths: Any) -> tuple[str, list[list[Any]], str, str, dict[s
         low_fields = extraction.low_confidence_fields
         model = metadata["model"]
         request_note = "本次图片已完成实时云端解析"
-    rows = [[name, round(float(value), 3)] for name, value in sorted(confidence.items())]
+    rows = [[name, round(float(value), 3), field_description(name, trip_payload)] for name, value in sorted(confidence.items())]
     low_text = (
         "✅ 没有低于 0.8 的字段。"
         if not low_fields
@@ -331,20 +348,20 @@ def build_twin(image_paths: Any) -> tuple[str, list[list[Any]], str, str, dict[s
         "trip_source": (
             "synthetic_example"
             if _is_sample_upload(paths)
-            else "uploaded_image"
+            else "ticket_example" if kind else "uploaded_image"
         ),
     }
     state["parse_summary"] = f"`{model}` · {request_note}"
-    if not _is_sample_upload(paths):
+    if not _is_functional_example(paths):
         state["draft_trip"] = state.pop("trip")
         state["stage"] = "needs_confirmation"
-    if not _is_sample_upload(paths) and extraction.notes:
+    if not _is_functional_example(paths) and extraction.notes:
         low_text += "\n\n" + "\n".join("- " + note for note in extraction.notes)
     return (
         json.dumps(trip_payload, ensure_ascii=False, indent=2),
         rows,
         low_text,
-        timeline_html(trip_payload) if _is_sample_upload(paths) else "",
+        timeline_html(trip_payload) if _is_functional_example(paths) else "",
         state,
     )
 
@@ -364,7 +381,7 @@ def build_twin_guarded(
     client_key = _anonymous_client_key(request)
     client_reserved = False
     global_reserved = False
-    if not _is_sample_upload(paths):
+    if not _is_functional_example(paths):
         if not privacy_confirmed:
             raise gr.Error("请先确认图片已遮挡身份证号、手机号、票号等敏感信息。")
         allowed, usage = browser_can_consume(store.get("usage"), "images")
@@ -410,7 +427,7 @@ def build_twin_guarded(
         else:
             message = "图片解析服务异常，请查看创空间运行日志；本次解析额度已退还。"
         raise gr.Error(message) from None
-    if not _is_sample_upload(paths):
+    if not _is_functional_example(paths):
         store["usage"] = consume_browser(usage, "images")
     return *result, store
 
@@ -555,6 +572,19 @@ def generate_plan_b(
         raise gr.Error("请先构建旅行数字孪生。")
     if state.get("low_confidence_fields") and not confirmed:
         raise gr.Error("请先核对并确认低置信字段。")
+    if state.get("trip_source") == "ticket_example":
+        _, analysis = analyze_trip(state["trip"], include_cached_amap=False)
+        text = (
+            "### ✅ 正常衔接示例\n\n沈阳 → 大连于 06:50 到达，下一段 09:54 从大连出发，间隔 184 分钟。当前本地规则没有检出风险，无需生成替代方案。"
+            if analysis.risk_count == 0 else
+            "### ⚠️ 冲突示例的处理建议\n\n大连 → 秦皇岛和大连 → 葫芦岛均为 09:54 出发，无法同时乘坐。请根据真实目的地选择保留其中一段，并移除另一段后重新检查风险。\n\n这是基于现有订单的本地冲突说明，不是实时余票查询；退改需自行确认，不自动操作订单。"
+        )
+        return text, "### 工具轨迹\n\n本次为脱敏功能示例，未调用高德 MCP 或 FlyAI，不展示杭州工具证据。", state, EMPTY_AMAP_STATUS, EMPTY_INSPECTION_STATUS
+    if state.get("trip_source") != "synthetic_example":
+        _, analysis = analyze_trip(state["trip"], include_cached_amap=False)
+        if analysis.risk_count == 0:
+            amap_panel, inspection_panel = context_panels_for_state(state)
+            return plan_b_markdown(state["trip"], include_cached_amap=False), "当前未检出风险，无需替代候选，本次未调用外部工具。", state, amap_panel, inspection_panel
     if state.get("trip_source") == "synthetic_example":
         amap_panel, inspection_panel = context_panels_for_state(state)
         return (
@@ -642,9 +672,11 @@ def generate_plan_b_guarded(
     request: gr.Request | None = None,
 ) -> tuple[str, str, dict[str, Any], str, str, dict[str, Any]]:
     store, _ = ensure_active_session(browser_store)
-    if state.get("trip_source") == "synthetic_example":
+    if state.get("trip_source") in {"synthetic_example", "ticket_example"}:
         result = generate_plan_b(state, confirmed)
         return *result, store
+    if isinstance(state.get("trip"), dict) and analyze_trip(state["trip"], include_cached_amap=False)[1].risk_count == 0:
+        return *generate_plan_b(state, confirmed), store
     if isinstance(state.get("live_candidate_artifact"), dict):
         result = generate_plan_b(state, confirmed)
         return *result, store
@@ -1009,7 +1041,7 @@ def _session_view(session: dict[str, Any]) -> tuple[Any, ...]:
     draft = trip_state.get("draft_trip")
     confidence_map = trip_state.get("field_confidence")
     confidence_rows = (
-        [[name, round(float(value), 3)] for name, value in sorted(confidence_map.items())]
+        [[name, round(float(value), 3), field_description(name, trip or draft)] for name, value in sorted(confidence_map.items())]
         if isinstance(confidence_map, dict)
         else []
     )
@@ -1202,7 +1234,12 @@ def create_app() -> gr.Blocks:
                     scale=3,
                 )
                 with gr.Column(scale=2, min_width=260):
-                    load_button = gr.Button("载入合成示例", variant="secondary")
+                    load_button = gr.Button("行程功能示例", variant="secondary")
+                    with gr.Column(visible=False) as example_choices:
+                        single_example_button = gr.Button("单行程正常示例")
+                        multi_example_button = gr.Button("多行程正常示例")
+                        conflict_example_button = gr.Button("行程冲突异常示例")
+                        gr.Markdown("单行程按钮展示杭州完整行程及其风险；多行程和冲突按钮使用脱敏车票。示例预算与人数为演示设置。")
                     preview = gr.HTML(value="", visible=False)
                     clear_import_button = gr.Button("清空已导入行程", variant="secondary")
             privacy_confirmed = gr.Checkbox(
@@ -1235,8 +1272,8 @@ def create_app() -> gr.Blocks:
                 apply_edits_button = gr.Button("应用并校验 TripGraph 修改")
             with gr.Accordion("查看字段识别置信度", open=False):
                 confidence = gr.Dataframe(
-                    headers=["字段", "置信度"],
-                    datatype=["str", "number"],
+                    headers=["字段", "置信度", "备注说明"],
+                    datatype=["str", "number", "str"],
                     interactive=False,
                     label="字段置信度",
                     max_height=240,
@@ -1263,7 +1300,7 @@ def create_app() -> gr.Blocks:
             with gr.Column(elem_classes=["guide-card"]):
                 gr.HTML(
                     "<div class='guide-title-row'><h3>💡 演示操作提示</h3>"
-                    "<span class='example-free-note'>使用“载入合成示例”后，以下四个标准问题"
+                    "<span class='example-free-note'>通过“行程功能示例”选择“单行程正常示例”后，以下四个标准问题"
                     "不消耗每日提问额度；"
                     "请完整复制到“向 TripTwin 提问”中，以免改写后计入额度。</span></div>"
                 )
@@ -1332,14 +1369,15 @@ def create_app() -> gr.Blocks:
             inputs=[browser_store],
             outputs=[*session_outputs, *view_outputs],
         )
-        load_event = load_button.click(
-            load_example, outputs=[image, status, state], api_name="load_example"
-        )
+        load_button.click(lambda: gr.update(visible=True), outputs=example_choices, api_name=False)
         import_outputs = [
             state, amap_status, inspection_status, privacy_confirmed, status,
             trip_json, confidence, low_confidence, timeline, confirmed,
             risks, plan_b, trace, question, chatbot, export_files,
         ]
+        load_event = single_example_button.click(
+            reset_import_view, outputs=import_outputs, api_name=False,
+        ).then(load_example, outputs=[image, status, state], api_name="load_example")
         image.upload(
             reset_import_view,
             outputs=import_outputs,
@@ -1354,6 +1392,18 @@ def create_app() -> gr.Blocks:
         def preview_callback(files):
             return import_preview(files, preview)
         load_event.then(preview_callback, inputs=image, outputs=preview)
+        for button, kind in ((multi_example_button, "multi"), (conflict_example_button, "conflict")):
+            def make_loader(selected):
+                def loader():
+                    return load_railway_example(selected)
+                return loader
+            selected_event = button.click(reset_import_view, outputs=import_outputs, api_name=False).then(
+                make_loader(kind), outputs=[image, status, state], api_name=False,
+            )
+            selected_event.then(context_panels_for_state, inputs=state, outputs=[amap_status, inspection_status]).then(
+                persist_current_session, inputs=session_inputs, outputs=session_outputs,
+            )
+            selected_event.then(preview_callback, inputs=image, outputs=preview)
         image.change(preview_callback, inputs=image, outputs=preview, api_name=False)
         clear_import_button.click(lambda: None, outputs=image, api_name=False).then(
             reset_import_view, outputs=import_outputs,
