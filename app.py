@@ -1044,7 +1044,8 @@ def create_app() -> gr.Blocks:
         )
         gr.HTML("<div class='hero'><h1>TripTwin 旅行数字孪生守护者</h1><p>把行程截图变成 TripGraph，结合真实 FlyAI 与高德 MCP 证据发现衔接、日期、预算、天气和体力风险，并生成可验证 Plan B。</p></div>")
         gr.HTML(
-            "<div class='quota-card'><b>使用额度说明：</b>腰包扁扁，费用有限。"
+            "<div class='quota-card'><b>使用额度说明：</b>作者腰包扁扁，短期内可承担的费用有限，"
+            "后续将逐步增加 AI 使用次数。"
             f"每个浏览器每天最多 {browser_limits()['questions']} 次提问、"
             f"{browser_limits()['images']} 次自行上传图片解析；"
             f"全站每天最多 {global_limits()['questions']} 次大模型问答、"
