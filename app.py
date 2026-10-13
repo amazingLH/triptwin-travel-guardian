@@ -105,6 +105,28 @@ APP_CSS = """
 #tripgraph-editor .codemirror-wrapper {height:360px!important;max-height:360px!important;overflow:hidden!important}
 #tripgraph-editor .cm-editor {height:100%!important;max-height:100%!important}
 #tripgraph-editor .cm-scroller {height:100%!important;max-height:100%!important;overflow-y:auto!important}
+/* Keep ambient motion behind stationary, readable cards. */
+body {background:#080f24!important;isolation:isolate}
+gradio-app {background:transparent!important}
+body::before {content:"";position:fixed;inset:-20%;z-index:-2;pointer-events:none;background:radial-gradient(ellipse at 18% 24%,#145b86 0%,transparent 42%),radial-gradient(ellipse at 82% 28%,#4c267f 0%,transparent 40%),radial-gradient(ellipse at 50% 86%,#123c60 0%,transparent 45%),#080f24;animation:aurora-drift 26s ease-in-out infinite alternate;will-change:transform}
+body::after {content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;background-image:linear-gradient(#7bc9ff09 1px,transparent 1px),linear-gradient(90deg,#7bc9ff09 1px,transparent 1px);background-size:54px 54px;mask-image:linear-gradient(to bottom,#000,transparent 95%)}
+.gradio-container {background:transparent!important;padding-top:24px!important;padding-bottom:36px!important}
+.hero {position:relative;overflow:hidden;background:linear-gradient(115deg,#102c46e8,#25204ce8);border:1px solid #72c9ff66;box-shadow:0 16px 60px #0004,inset 0 1px 0 #ffffff14;padding:30px}
+.hero::before {content:"";position:absolute;width:280px;height:280px;right:-60px;top:-170px;border-radius:50%;background:#67bfff28;filter:blur(25px);pointer-events:none}
+.hero h1 {color:#f0f8ff;letter-spacing:.5px}.hero p {color:#b7cfe4;line-height:1.8}
+.step-card {background:linear-gradient(135deg,#fffffff7,#eef5fff5)!important;border:1px solid #b8d7f7aa!important;border-radius:20px!important;box-shadow:0 12px 38px #0003,inset 0 1px 0 #fff!important}
+.step-number {background:linear-gradient(140deg,#277ad6,#7151e8);box-shadow:0 4px 14px #536fe640}
+.step-nav a {color:#d5eaff;background:#1a3158b3;border:1px solid #8cbcff40;transition:background .2s,box-shadow .2s}
+.step-nav a:hover {background:#304778;box-shadow:0 0 18px #6fa9ff30}
+.quota-card {background:#17233fe8;color:#d3dfef;border-color:#7699cd55;line-height:1.8;box-shadow:0 8px 26px #0002}.quota-card b {color:#a9d9ff}
+#service-notice {background:#101d33c9;border:1px solid #799ecb33;border-radius:14px;padding:10px 16px;color:#cfdeee!important}
+#service-notice p,#service-notice strong {color:#cfdeee!important}#service-notice blockquote {border-color:#70b9ef}
+#session-management {background:#eaf3fff2;border:1px solid #bbdcff80;border-radius:14px;box-shadow:0 8px 25px #0002}
+.guide-card {background:linear-gradient(120deg,#edf6ff,#f4f0ff);border-color:#ccdafa}.guide-card h3 {color:#314a83}.guide-card p,.guide-card li,.example-free-note {color:#4b5d80}
+footer {color:#b7cfe4!important}footer a,footer button {color:#b7cfe4!important}
+@keyframes aurora-drift {from {transform:translate3d(-2%,-1%,0) rotate(-3deg)}to {transform:translate3d(2%,2%,0) rotate(3deg)}}
+@media(prefers-reduced-motion:reduce) {body::before {animation:none;will-change:auto}.step-nav a {transition:none}}
+@media(max-width:640px) {body::before {animation:none;will-change:auto}.hero {padding:20px}}
 """
 
 BROWSER_STATE_SECRET = os.getenv("TRIPTWIN_BROWSER_STATE_SECRET") or secrets.token_urlsafe(32)
@@ -1054,9 +1076,9 @@ def create_app() -> gr.Blocks:
             f"全站最多 {global_limits()['agent_runs']} 次。重复问题会复用缓存。"
             "达到限制后，合成示例、确定性风险检查和已生成结果仍可查看。</div>"
         )
-        gr.Markdown(f"> **隐私与服务声明：** {DISCLAIMER}")
+        gr.Markdown(f"> **隐私与服务声明：** {DISCLAIMER}", elem_id="service-notice")
         gr.HTML("<nav class='step-nav' aria-label='使用步骤'><a href='#step-import'>1 导入行程</a><a href='#step-build'>2 构建与校对</a><a href='#step-risk'>3 检查风险</a><a href='#step-plan'>4 生成 Plan B</a><a href='#step-chat'>5 提问与导出</a></nav>")
-        with gr.Accordion("我的会话 · 新建 / 查看历史", open=False):
+        with gr.Accordion("我的会话 · 新建 / 查看历史", open=False, elem_id="session-management"):
             with gr.Row(elem_classes=["session-bar"]):
                 history_select = gr.Dropdown(
                     choices=[], label="历史会话", interactive=True, scale=3
