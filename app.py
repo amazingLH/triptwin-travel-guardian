@@ -1,10 +1,12 @@
-"""TripTwin Stage 5 Gradio P0 demo."""
+"""TripTwin production-candidate Gradio application."""
+# ruff: noqa: E402
 
 from __future__ import annotations
 
 import hashlib
 import json
 import os
+import secrets
 import sys
 from pathlib import Path
 from typing import Any
@@ -32,18 +34,24 @@ from triptwin.demo_service import (
 )
 from triptwin.trip_assistant import answer_with_trip_context
 from triptwin.session_history import (
+    clear_sessions,
     create_session,
+    delete_session,
     ensure_active_session,
     history_choices,
     save_active_session,
     switch_session,
 )
-from triptwin.vision_parser import extract_trip_from_image
+from triptwin.runtime_agent import run_live_trip
+from triptwin.exporter import export_trip_files
+from triptwin.vision_parser import extract_trip_from_images
 from triptwin.usage_guard import (
     browser_can_consume,
     browser_limits,
     consume_browser,
     global_limits,
+    release_reservation,
+    reserve_client,
     reserve_global,
 )
 
@@ -87,10 +95,13 @@ APP_CSS = """
 .quota-card b {color:#9a3412}
 """
 
+BROWSER_STATE_SECRET = os.getenv("TRIPTWIN_BROWSER_STATE_SECRET") or secrets.token_urlsafe(32)
+RATE_LIMIT_SALT = os.getenv("TRIPTWIN_RATE_LIMIT_SALT") or secrets.token_urlsafe(32)
 
-def load_example() -> tuple[str, str, dict[str, str]]:
+
+def load_example() -> tuple[list[str], str, dict[str, str]]:
     return (
-        str(SAMPLE_IMAGE_PATH),
+        [str(SAMPLE_IMAGE_PATH)],
         "✅ 已载入完全虚构的黄金案例，无真实个人信息。",
         {"trip_source": "synthetic_example"},
     )
@@ -105,6 +116,14 @@ def _sample_panel(markdown: str, title: str) -> str:
         "> **公开合成示例证据：** 以下结果属于所有访客共享的杭州虚构案例，"
         "不含真实个人信息，也不是当前访客的历史记录。\n\n"
         f"{body}"
+    )
+
+
+def _live_amap_panel(inspection: Any) -> str:
+    return amap_inspection_markdown(inspection).replace(
+        "### 🛰️ 空间与天气核验",
+        "### 🛰️ 当前上传行程 · 空间与天气核验",
+        1,
     )
 
 
@@ -155,10 +174,10 @@ def safe_context_panels(
     return amap_text, inspection_text
 
 
-def reset_uploaded_context() -> tuple[dict[str, Any], str, str]:
+def reset_uploaded_context() -> tuple[dict[str, Any], str, str, bool]:
     """Clear evidence when a browser selects a new local image."""
 
-    return {}, EMPTY_AMAP_STATUS, EMPTY_INSPECTION_STATUS
+    return {}, EMPTY_AMAP_STATUS, EMPTY_INSPECTION_STATUS, False
 
 
 def run_manual_inspection_for_state(
@@ -178,6 +197,23 @@ def run_manual_inspection_for_state(
             f"{analysis.total_risk_score} 分**",
         )
 
+    if isinstance(state.get("live_inspection"), dict):
+        from triptwin.live_context import AmapInspection
+
+        inspection = AmapInspection.model_validate(state["live_inspection"])
+        _, analysis = analyze_trip(state["trip"], include_cached_amap=False)
+        return (
+            _live_amap_panel(inspection),
+            "\n".join(
+                [
+                    "### ⏱️ 当前上传行程 · 实时巡检",
+                    "",
+                    f"- 最近实时核验：**{state.get('live_generated_at', '未知')}**",
+                    f"- 当前确定性结果：**{analysis.risk_count} 个风险 / {analysis.total_risk_score} 分**",
+                    "- 外部事实来自当前会话的高德 MCP；候选来自当前会话的 FlyAI 查询。",
+                ]
+            ),
+        )
     _, analysis = analyze_trip(state["trip"], include_cached_amap=False)
     return (
         UPLOADED_AMAP_PENDING,
@@ -193,11 +229,25 @@ def run_manual_inspection_for_state(
     )
 
 
-def build_twin(image_path: str | None) -> tuple[Any, list[list[Any]], str, str, dict[str, Any]]:
-    if not image_path:
+def _image_paths(value: Any) -> list[Path]:
+    values = value if isinstance(value, list) else [value] if value else []
+    paths: list[Path] = []
+    for item in values:
+        candidate = item.get("path") if isinstance(item, dict) else item
+        if isinstance(candidate, (str, os.PathLike)) and str(candidate):
+            paths.append(Path(candidate).resolve())
+    return paths
+
+
+def _is_sample_upload(paths: list[Path]) -> bool:
+    return len(paths) == 1 and _same_image(paths[0], SAMPLE_IMAGE_PATH)
+
+
+def build_twin(image_paths: Any) -> tuple[str, list[list[Any]], str, str, dict[str, Any]]:
+    paths = _image_paths(image_paths)
+    if not paths:
         raise gr.Error("请先上传图片或点击“载入合成示例”。")
-    image = Path(image_path).resolve()
-    if _same_image(image, SAMPLE_IMAGE_PATH):
+    if _is_sample_upload(paths):
         evidence = load_cached_vision()
         trip_payload = evidence["trip"]
         confidence = evidence["field_confidence"]
@@ -206,7 +256,7 @@ def build_twin(image_path: str | None) -> tuple[Any, list[list[Any]], str, str, 
         accuracy = f"{evidence['field_accuracy']:.1%}"
         request_note = f"复用已验真的云端解析证据 · 字段准确率 {accuracy}"
     else:
-        extraction, metadata = extract_trip_from_image(image)
+        extraction, metadata = extract_trip_from_images(paths)
         trip_payload = extraction.trip.model_dump(mode="json")
         confidence = extraction.field_confidence
         low_fields = extraction.low_confidence_fields
@@ -224,39 +274,124 @@ def build_twin(image_path: str | None) -> tuple[Any, list[list[Any]], str, str, 
         "field_confidence": confidence,
         "trip_source": (
             "synthetic_example"
-            if _same_image(image, SAMPLE_IMAGE_PATH)
+            if _is_sample_upload(paths)
             else "uploaded_image"
         ),
     }
-    status = f"✅ `{model}` 图片解析完成；{request_note}。"
-    return trip_payload, rows, low_text, timeline_html(trip_payload), state
+    state["parse_summary"] = f"`{model}` · {request_note}"
+    return (
+        json.dumps(trip_payload, ensure_ascii=False, indent=2),
+        rows,
+        low_text,
+        timeline_html(trip_payload),
+        state,
+    )
 
 
 def build_twin_guarded(
-    image_path: str | None, browser_store: dict[str, Any] | None
-) -> tuple[Any, list[list[Any]], str, str, dict[str, Any], dict[str, Any]]:
+    image_paths: Any,
+    privacy_confirmed: bool,
+    browser_store: dict[str, Any] | None,
+    request: gr.Request | None = None,
+) -> tuple[str, list[list[Any]], str, str, dict[str, Any], dict[str, Any]]:
     """Apply browser/global limits only to real user-uploaded image calls."""
 
-    if not image_path:
+    paths = _image_paths(image_paths)
+    if not paths:
         raise gr.Error("请先上传图片或点击“载入合成示例”。")
-    image_path_obj = Path(image_path).resolve()
     store, _ = ensure_active_session(browser_store)
-    if not _same_image(image_path_obj, SAMPLE_IMAGE_PATH):
+    client_key = _anonymous_client_key(request)
+    client_reserved = False
+    global_reserved = False
+    if not _is_sample_upload(paths):
+        if not privacy_confirmed:
+            raise gr.Error("请先确认图片已遮挡身份证号、手机号、票号等敏感信息。")
         allowed, usage = browser_can_consume(store.get("usage"), "images")
         if not allowed:
             raise gr.Error(
                 f"为保护有限 Token，每个浏览器每天最多解析 "
                 f"{browser_limits()['images']} 张自行上传的图片；请明日再试。"
             )
+        if client_key:
+            client_allowed, _, client_limit = reserve_client(client_key, "images")
+            if not client_allowed:
+                raise gr.Error(f"当前匿名访客今日已达到 {client_limit} 次图片解析上限。")
+            client_reserved = True
         globally_allowed, _, global_limit = reserve_global("images")
         if not globally_allowed:
+            if client_reserved:
+                release_reservation("client", client_key, "images")
             raise gr.Error(
                 f"今日全站图片解析已达到 {global_limit} 次；"
-                "合成示例、风险检查和 Plan B 仍可正常体验。"
+                "合成示例、确定性风险检查和已生成结果仍可查看。"
             )
+        global_reserved = True
+    try:
+        result = build_twin(paths)
+    except Exception:
+        if global_reserved:
+            release_reservation("global", "all", "images")
+        if client_reserved:
+            release_reservation("client", client_key, "images")
+        raise
+    if not _is_sample_upload(paths):
         store["usage"] = consume_browser(usage, "images")
-    result = build_twin(image_path)
     return *result, store
+
+
+def _anonymous_client_key(request: gr.Request | None) -> str:
+    if request is None:
+        return ""
+    client = getattr(request, "client", None)
+    host = str(getattr(client, "host", ""))
+    headers = getattr(request, "headers", {}) or {}
+    user_agent = str(headers.get("user-agent", ""))
+    if not host and not user_agent:
+        return ""
+    return hashlib.sha256(
+        (host + "\n" + user_agent + "\n" + RATE_LIMIT_SALT).encode("utf-8")
+    ).hexdigest()
+
+
+def apply_tripgraph_edits(
+    trip_json_text: str, state: dict[str, Any] | None
+) -> tuple[str, str, dict[str, Any], str, bool]:
+    """Validate user corrections before replacing the active TripGraph."""
+
+    try:
+        payload = json.loads(trip_json_text)
+        from triptwin.models import Trip
+
+        trip = Trip.model_validate(payload)
+    except Exception as exc:
+        raise gr.Error(f"TripGraph 修改未通过校验：{exc}") from None
+    updated = dict(state or {})
+    updated["trip"] = trip.model_dump(mode="json")
+    updated["trip_source"] = "user_corrected"
+    updated.pop("live_candidate_artifact", None)
+    updated.pop("live_inspection", None)
+    return (
+        trip.model_dump_json(indent=2),
+        timeline_html(updated["trip"]),
+        updated,
+        "✅ 修改已通过类型、引用与依赖环校验；请重新检查风险。",
+        False,
+    )
+
+
+def export_current_trip(state: dict[str, Any] | None) -> list[str]:
+    if not isinstance(state, dict) or not isinstance(state.get("trip"), dict):
+        raise gr.Error("请先构建旅行数字孪生。")
+    return export_trip_files(state["trip"])
+
+
+def render_state_trip(state: dict[str, Any] | None) -> tuple[str, str]:
+    if not isinstance(state, dict) or not isinstance(state.get("trip"), dict):
+        return "", ""
+    return (
+        json.dumps(state["trip"], ensure_ascii=False, indent=2),
+        timeline_html(state["trip"]),
+    )
 
 
 def _same_image(first: Path, second: Path) -> bool:
@@ -280,18 +415,149 @@ def check_risks(state: dict[str, Any], confirmed: bool) -> str:
     )
 
 
-def generate_plan_b(state: dict[str, Any], confirmed: bool) -> tuple[str, str]:
+def generate_plan_b(
+    state: dict[str, Any], confirmed: bool
+) -> tuple[str, str, dict[str, Any], str, str]:
     if not state or "trip" not in state:
         raise gr.Error("请先构建旅行数字孪生。")
     if state.get("low_confidence_fields") and not confirmed:
         raise gr.Error("请先核对并确认低置信字段。")
+    if state.get("trip_source") == "synthetic_example":
+        amap_panel, inspection_panel = context_panels_for_state(state)
+        return (
+            plan_b_markdown(state["trip"], include_cached_amap=True),
+            tool_trace_markdown(),
+            state,
+            amap_panel,
+            inspection_panel,
+        )
+
+    if isinstance(state.get("live_candidate_artifact"), dict) and isinstance(
+        state.get("live_inspection"), dict
+    ):
+        from triptwin.live_context import AmapInspection
+
+        inspection = AmapInspection.model_validate(state["live_inspection"])
+        _, analysis = analyze_trip(state["trip"], include_cached_amap=False)
+        inspection_panel = "\n".join(
+            [
+                "### ⏱️ 当前上传行程 · 实时巡检",
+                "",
+                f"- 最近实时核验：**{state.get('live_generated_at', '未知')}**",
+                f"- 云端会话：`{state.get('managed_session', '已脱敏')}`",
+                f"- 当前确定性结果：**{analysis.risk_count} 个风险 / {analysis.total_risk_score} 分**",
+            ]
+        )
+        return (
+            plan_b_markdown(
+                state["trip"],
+                include_cached_amap=False,
+                candidate_artifact=state["live_candidate_artifact"],
+                require_simulation=True,
+            ),
+            tool_trace_markdown(state["live_candidate_artifact"], inspection),
+            state,
+            _live_amap_panel(inspection),
+            inspection_panel,
+        )
+
+    try:
+        result = run_live_trip(state["trip"])
+    except Exception as exc:
+        raise gr.Error(
+            "当前行程实时核验失败，TripTwin 已停止生成，未套用任何示例数据："
+            + str(exc)
+        ) from None
+    updated = dict(state)
+    updated.update(
+        {
+            "trip": result.trip,
+            "live_candidate_artifact": result.candidate_artifact,
+            "live_inspection": result.inspection.model_dump(mode="json"),
+            "live_generated_at": result.generated_at,
+            "managed_session": result.session_id_masked,
+        }
+    )
+    inspection_panel = "\n".join(
+        [
+            "### ⏱️ 当前上传行程 · 实时巡检",
+            "",
+            f"- 完成时间：**{result.generated_at}**",
+            f"- 云端会话：`{result.session_id_masked}`（已脱敏）",
+            f"- 运行状态：`{result.run_status}` · 工具调用 **{result.tool_call_count}** · 错误 **{result.error_count}**",
+            f"- 当前确定性结果：**{result.analysis.risk_count} 个风险 / {result.analysis.total_risk_score} 分**",
+        ]
+    )
     return (
         plan_b_markdown(
-            state["trip"],
-            include_cached_amap=state.get("trip_source") == "synthetic_example",
+            result.trip,
+            include_cached_amap=False,
+            candidate_artifact=result.candidate_artifact,
+            require_simulation=True,
         ),
-        tool_trace_markdown(),
+        tool_trace_markdown(result.candidate_artifact, result.inspection),
+        updated,
+        _live_amap_panel(result.inspection),
+        inspection_panel,
     )
+
+
+def generate_plan_b_guarded(
+    state: dict[str, Any],
+    confirmed: bool,
+    browser_store: dict[str, Any] | None,
+    request: gr.Request | None = None,
+) -> tuple[str, str, dict[str, Any], str, str, dict[str, Any]]:
+    store, _ = ensure_active_session(browser_store)
+    if state.get("trip_source") == "synthetic_example":
+        result = generate_plan_b(state, confirmed)
+        return *result, store
+    if isinstance(state.get("live_candidate_artifact"), dict):
+        result = generate_plan_b(state, confirmed)
+        return *result, store
+
+    allowed, usage = browser_can_consume(store.get("usage"), "agent_runs")
+    if not allowed:
+        raise gr.Error(
+            f"当前浏览器今天最多执行 {browser_limits()['agent_runs']} 次实时工具核验。"
+        )
+    client_key = _anonymous_client_key(request)
+    client_reserved = False
+    if client_key:
+        client_allowed, _, client_limit = reserve_client(client_key, "agent_runs")
+        if not client_allowed:
+            raise gr.Error(f"当前匿名访客今日已达到 {client_limit} 次实时工具核验上限。")
+        client_reserved = True
+    global_allowed, _, global_limit = reserve_global("agent_runs")
+    if not global_allowed:
+        if client_reserved:
+            release_reservation("client", client_key, "agent_runs")
+        raise gr.Error(f"今日全站实时工具核验已达到 {global_limit} 次。")
+    try:
+        result = generate_plan_b(state, confirmed)
+    except Exception:
+        release_reservation("global", "all", "agent_runs")
+        if client_reserved:
+            release_reservation("client", client_key, "agent_runs")
+        raise
+    store["usage"] = consume_browser(usage, "agent_runs")
+    return *result, store
+
+
+def run_live_inspection_guarded(
+    state: dict[str, Any],
+    confirmed: bool,
+    browser_store: dict[str, Any] | None,
+    request: gr.Request | None = None,
+) -> tuple[str, str, dict[str, Any], dict[str, Any]]:
+    if not isinstance(state, dict) or not isinstance(state.get("trip"), dict):
+        raise gr.Error("请先构建旅行数字孪生。")
+    if state.get("low_confidence_fields") and not confirmed:
+        raise gr.Error("请先核对并确认低置信字段，再执行外部工具核验。")
+    _, _, updated, amap_panel, inspection_panel, store = generate_plan_b_guarded(
+        state, confirmed, browser_store, request
+    )
+    return amap_panel, inspection_panel, updated, store
 
 
 def answer_question(
@@ -316,6 +582,8 @@ def answer_question(
                 trip_payload,
                 include_cached_amap=state.get("trip_source")
                 == "synthetic_example",
+                candidate_artifact=state.get("live_candidate_artifact"),
+                amap_inspection=state.get("live_inspection"),
             ),
         )
     except Exception:
@@ -329,6 +597,7 @@ def answer_question_guarded(
     history: list[dict[str, Any]] | None,
     state: dict[str, Any],
     browser_store: dict[str, Any] | None,
+    request: gr.Request | None = None,
 ) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
     """Answer with browser caching and bounded daily public model usage."""
 
@@ -361,7 +630,14 @@ def answer_question_guarded(
     # showcase questions are quota-free; paraphrases still use the browser's
     # daily allowance even when their answer can be resolved locally.
     deterministic_answer = _synthetic_example_answer(text, state)
-    cache_key = _answer_cache_key(text, trip_payload)
+    cache_key = _answer_cache_key(
+        text,
+        {
+            "trip": trip_payload,
+            "candidate_artifact": state.get("live_candidate_artifact"),
+            "live_generated_at": state.get("live_generated_at"),
+        },
+    )
     cached = store.get("answer_cache", {}).get(cache_key)
     if isinstance(cached, str) and cached.strip():
         conversation = list(history or [])
@@ -386,8 +662,20 @@ def answer_question_guarded(
         store["answer_cache"] = dict(list(cache.items())[-50:])
         return "", conversation, store
 
+    client_key = _anonymous_client_key(request)
+    client_reserved = False
+    if client_key:
+        client_allowed, _, client_limit = reserve_client(client_key, "questions")
+        if not client_allowed:
+            return _quota_answer(
+                text, history, f"当前匿名访客每天最多 {client_limit} 次提问", store
+            )
+        client_reserved = True
+
     allowed, usage = browser_can_consume(store.get("usage"), "questions")
     if not allowed:
+        if client_reserved:
+            release_reservation("client", client_key, "questions")
         return _quota_answer(
             text,
             history,
@@ -411,6 +699,8 @@ def answer_question_guarded(
 
     globally_allowed, _, global_limit = reserve_global("questions")
     if not globally_allowed:
+        if client_reserved:
+            release_reservation("client", client_key, "questions")
         return _quota_answer(
             text,
             history,
@@ -526,7 +816,7 @@ def _quota_answer(
                 "role": "assistant",
                 "content": (
                     f"{reason}，为控制使用费用，本次不再调用模型。"
-                    "合成示例、风险检查和 Plan B 仍可继续使用。"
+                    "合成示例、确定性风险检查和已生成结果仍可继续查看。"
                 ),
             },
         ]
@@ -608,7 +898,7 @@ def _session_view(session: dict[str, Any]) -> tuple[Any, ...]:
     return (
         None,
         snapshot.get("status") or "等待载入图片。",
-        trip if isinstance(trip, dict) else None,
+        json.dumps(trip, ensure_ascii=False, indent=2) if isinstance(trip, dict) else "",
         confidence_rows,
         low_text,
         timeline,
@@ -621,6 +911,8 @@ def _session_view(session: dict[str, Any]) -> tuple[Any, ...]:
         trip_state,
         safe_amap,
         safe_inspection,
+        None,
+        False,
     )
 
 
@@ -719,15 +1011,24 @@ def open_history_session(
     return store, _history_update(store), _session_badge(session), *_session_view(session)
 
 
+def delete_current_history_session(browser_store: Any) -> tuple[Any, ...]:
+    store, active = ensure_active_session(browser_store)
+    store, session = delete_session(store, active["id"])
+    return store, _history_update(store), _session_badge(session), *_session_view(session)
+
+
+def clear_all_history_sessions(browser_store: Any) -> tuple[Any, ...]:
+    store, session = clear_sessions(browser_store)
+    return store, _history_update(store), _session_badge(session), *_session_view(session)
+
+
 def create_app() -> gr.Blocks:
     with gr.Blocks(title="TripTwin 旅行数字孪生守护者") as demo:
         state = gr.State({})
         browser_store = gr.BrowserState(
             default_value={"version": 1, "active_id": None, "sessions": []},
             storage_key="triptwin_sessions_v1",
-            secret=os.getenv(
-                "TRIPTWIN_BROWSER_STATE_SECRET", "triptwin-local-v1"
-            ),
+            secret=BROWSER_STATE_SECRET,
         )
         gr.HTML("<div class='hero'><h1>TripTwin 旅行数字孪生守护者</h1><p>把行程截图变成 TripGraph，结合真实 FlyAI 与高德 MCP 证据发现衔接、日期、预算、天气和体力风险，并生成可验证 Plan B。</p></div>")
         gr.HTML(
@@ -735,8 +1036,10 @@ def create_app() -> gr.Blocks:
             f"每个浏览器每天最多 {browser_limits()['questions']} 次提问、"
             f"{browser_limits()['images']} 次自行上传图片解析；"
             f"全站每天最多 {global_limits()['questions']} 次大模型问答、"
-            f"{global_limits()['images']} 次图片解析。重复问题会复用缓存。"
-            "达到限制后，合成示例、风险检查和 Plan B 仍可正常体验。</div>"
+            f"{global_limits()['images']} 次图片解析；每位访客每天最多 "
+            f"{browser_limits()['agent_runs']} 次实时高德/FlyAI 核验，"
+            f"全站最多 {global_limits()['agent_runs']} 次。重复问题会复用缓存。"
+            "达到限制后，合成示例、确定性风险检查和已生成结果仍可查看。</div>"
         )
         gr.Markdown(f"> **隐私与服务声明：** {DISCLAIMER}")
         with gr.Row(elem_classes=["session-bar"]):
@@ -750,14 +1053,36 @@ def create_app() -> gr.Blocks:
                 new_session_button = gr.Button(
                     "＋ 新建独立会话", variant="secondary"
                 )
+                delete_session_button = gr.Button("删除当前会话", variant="stop")
+                clear_sessions_button = gr.Button("清空全部历史", variant="stop")
         with gr.Row():
             with gr.Column(scale=1):
-                image = gr.Image(type="filepath", label="① 上传行程截图")
+                image = gr.File(
+                    type="filepath",
+                    file_count="multiple",
+                    file_types=["image"],
+                    label="① 上传 1–5 张行程截图",
+                )
                 load_button = gr.Button("载入合成示例", variant="secondary")
+                privacy_confirmed = gr.Checkbox(
+                    label="我确认自行上传的图片已遮挡身份证号、手机号和票号"
+                )
                 build_button = gr.Button("② 构建旅行数字孪生", variant="primary")
                 status = gr.Markdown("等待载入图片。")
             with gr.Column(scale=1):
-                trip_json = gr.JSON(label="结构化 TripGraph")
+                trip_json = gr.Code(
+                    language="json",
+                    label="结构化 TripGraph（可校对修改）",
+                    interactive=True,
+                    lines=18,
+                )
+                apply_edits_button = gr.Button("应用并校验 TripGraph 修改")
+                export_button = gr.Button("导出 TripGraph JSON 与日历 ICS")
+                export_files = gr.File(
+                    label="导出文件",
+                    file_count="multiple",
+                    interactive=False,
+                )
                 confidence = gr.Dataframe(
                     headers=["字段", "置信度"],
                     datatype=["str", "number"],
@@ -778,7 +1103,7 @@ def create_app() -> gr.Blocks:
         with gr.Row():
             amap_status = gr.Markdown(EMPTY_AMAP_STATUS)
             inspection_status = gr.Markdown(EMPTY_INSPECTION_STATUS)
-        inspect_button = gr.Button("⑤ 手动巡检", variant="secondary")
+        inspect_button = gr.Button("⑤ 查看 / 执行实时巡检", variant="secondary")
         with gr.Row():
             with gr.Column(scale=1, elem_classes=["guide-card"]):
                 gr.HTML(
@@ -843,6 +1168,8 @@ def create_app() -> gr.Blocks:
             state,
             amap_status,
             inspection_status,
+            export_files,
+            privacy_confirmed,
         ]
 
         demo.load(
@@ -855,7 +1182,7 @@ def create_app() -> gr.Blocks:
         )
         image.upload(
             reset_uploaded_context,
-            outputs=[state, amap_status, inspection_status],
+            outputs=[state, amap_status, inspection_status, privacy_confirmed],
             api_name=False,
         )
         load_context_event = load_event.then(
@@ -870,7 +1197,7 @@ def create_app() -> gr.Blocks:
         )
         build_event = build_button.click(
             build_twin_guarded,
-            inputs=[image, browser_store],
+            inputs=[image, privacy_confirmed, browser_store],
             outputs=[
                 trip_json,
                 confidence,
@@ -880,7 +1207,11 @@ def create_app() -> gr.Blocks:
                 browser_store,
             ],
             api_name=False,
-        ).then(lambda: "✅ TripGraph 已构建。", outputs=status)
+        ).then(
+            lambda current: "✅ TripGraph 已构建；" + str(current.get("parse_summary", "")),
+            inputs=[state],
+            outputs=status,
+        )
         build_context_event = build_event.then(
             context_panels_for_state,
             inputs=state,
@@ -890,6 +1221,27 @@ def create_app() -> gr.Blocks:
             persist_current_session,
             inputs=session_inputs,
             outputs=session_outputs,
+        )
+        edit_event = apply_edits_button.click(
+            apply_tripgraph_edits,
+            inputs=[trip_json, state],
+            outputs=[trip_json, timeline, state, status, confirmed],
+            api_name=False,
+        )
+        edit_event.then(
+            context_panels_for_state,
+            inputs=state,
+            outputs=[amap_status, inspection_status],
+        ).then(
+            persist_current_session,
+            inputs=session_inputs,
+            outputs=session_outputs,
+        )
+        export_button.click(
+            export_current_trip,
+            inputs=[state],
+            outputs=[export_files],
+            api_name=False,
         )
         check_event = check_button.click(
             check_risks,
@@ -911,23 +1263,33 @@ def create_app() -> gr.Blocks:
             outputs=session_outputs,
         )
         plan_event = plan_button.click(
-            generate_plan_b,
-            inputs=[state, confirmed],
-            outputs=[plan_b, trace],
-            api_name="generate_plan_b",
+            generate_plan_b_guarded,
+            inputs=[state, confirmed, browser_store],
+            outputs=[plan_b, trace, state, amap_status, inspection_status, browser_store],
+            api_name=False,
         )
-        plan_event.then(
+        plan_render_event = plan_event.then(
+            render_state_trip,
+            inputs=[state],
+            outputs=[trip_json, timeline],
+        )
+        plan_render_event.then(
             persist_current_session,
             inputs=session_inputs,
             outputs=session_outputs,
         )
         inspect_event = inspect_button.click(
-            run_manual_inspection_for_state,
-            inputs=[state],
-            outputs=[amap_status, inspection_status],
+            run_live_inspection_guarded,
+            inputs=[state, confirmed, browser_store],
+            outputs=[amap_status, inspection_status, state, browser_store],
             api_name=False,
         )
-        inspect_event.then(
+        inspect_render_event = inspect_event.then(
+            render_state_trip,
+            inputs=[state],
+            outputs=[trip_json, timeline],
+        )
+        inspect_render_event.then(
             persist_current_session,
             inputs=session_inputs,
             outputs=session_outputs,
@@ -965,6 +1327,18 @@ def create_app() -> gr.Blocks:
             inputs=[history_select, *session_inputs],
             outputs=[*session_outputs, *view_outputs],
             api_name="open_session",
+        )
+        delete_session_button.click(
+            delete_current_history_session,
+            inputs=[browser_store],
+            outputs=[*session_outputs, *view_outputs],
+            api_name=False,
+        )
+        clear_sessions_button.click(
+            clear_all_history_sessions,
+            inputs=[browser_store],
+            outputs=[*session_outputs, *view_outputs],
+            api_name=False,
         )
     return demo
 

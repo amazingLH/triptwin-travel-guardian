@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import json
+import sqlite3
 
 from triptwin.usage_guard import (
     browser_can_consume,
@@ -21,8 +21,8 @@ def test_default_public_limits(monkeypatch) -> None:
     ):
         monkeypatch.delenv(name, raising=False)
 
-    assert browser_limits() == {"questions": 5, "images": 2}
-    assert global_limits() == {"questions": 40, "images": 5}
+    assert browser_limits() == {"questions": 5, "images": 2, "agent_runs": 1}
+    assert global_limits() == {"questions": 40, "images": 5, "agent_runs": 8}
 
 
 def test_browser_usage_resets_and_stops_at_daily_limit(monkeypatch) -> None:
@@ -53,5 +53,9 @@ def test_global_usage_is_persisted_and_capped(monkeypatch, tmp_path) -> None:
 
     assert allowed is False
     assert (count, limit) == (2, 2)
-    assert json.loads(path.read_text(encoding="utf-8"))["questions"] == 2
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT count FROM usage WHERE day=? AND scope=? AND kind=?",
+            ("2026-10-13", "global", "questions"),
+        ).fetchone()[0] == 2
     assert reserve_global("questions", path=path, day="2026-10-14")[0] is True

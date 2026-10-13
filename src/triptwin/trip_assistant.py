@@ -7,20 +7,20 @@ from typing import Any
 
 import httpx
 
-from triptwin.config import Settings
+from triptwin.config import ModelSettings, Settings
 
 
 def answer_with_trip_context(
     question: str,
     context: dict[str, Any],
     *,
-    settings: Settings | None = None,
+    settings: Settings | ModelSettings | None = None,
     model: str | None = None,
     timeout_seconds: float = 60,
 ) -> str:
     """Answer naturally while staying inside verified project evidence."""
 
-    resolved_settings = settings or Settings.from_env()
+    resolved_settings = settings or ModelSettings.from_env()
     resolved_model = model or resolved_settings.dashscope_text_model
     endpoint = (
         f"https://{resolved_settings.bailian_workspace_id}.cn-beijing.maas.aliyuncs.com"

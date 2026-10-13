@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from triptwin.config import Settings
+from triptwin.config import ModelSettings, Settings
 
 
 def _clear_cloud_environment(monkeypatch) -> None:
@@ -63,4 +63,17 @@ def test_settings_load_from_cloud_environment(monkeypatch, tmp_path: Path) -> No
     assert settings.bailian_workspace_id == "ws-cloud"
     assert settings.dashscope_text_model == "qwen3.7-flash"
     assert settings.dashscope_vision_model == "qwen3.7-flash"
+
+
+def test_direct_model_calls_do_not_require_agent_or_flyai_credentials(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _clear_cloud_environment(monkeypatch)
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "secret-dashscope")
+    monkeypatch.setenv("BAILIAN_WORKSPACE_ID", "ws-cloud")
+
+    settings = ModelSettings.from_env(tmp_path / "missing.env")
+
+    assert settings.bailian_workspace_id == "ws-cloud"
+    assert "secret-dashscope" not in repr(settings)
 

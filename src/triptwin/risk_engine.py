@@ -32,13 +32,14 @@ SEVERITY_ORDER = {
 
 
 class RiskEngine:
-    """Evaluate four explainable risk families against a TripGraph."""
+    """Evaluate explainable schedule, budget, mobility and evidence risks."""
 
     def analyze(self, trip: Trip) -> TripAnalysis:
         event_by_id = {event.id: event for event in trip.events}
         risks: list[Risk] = []
 
         risks.extend(self._connection_risks(trip, event_by_id))
+        risks.extend(self._schedule_risks(trip, event_by_id))
         risks.extend(self._date_risks(trip))
         budget, budget_risks, warnings = self._budget_analysis(trip)
         risks.extend(budget_risks)
@@ -46,6 +47,11 @@ class RiskEngine:
         weather_risks, weather_warnings = self._weather_risks(trip)
         risks.extend(weather_risks)
         warnings.extend(weather_warnings)
+        warnings.extend(
+            f"{event.id} 的解析置信度为 {event.confidence:.2f}，建议人工核对。"
+            for event in trip.events
+            if event.confidence < 0.8
+        )
 
         risks.sort(
             key=lambda risk: (-SEVERITY_ORDER[risk.severity], -risk.score, risk.id)
@@ -133,6 +139,56 @@ class RiskEngine:
                     else "local_rule",
                 )
             )
+        return risks
+
+    def _schedule_risks(
+        self, trip: Trip, event_by_id: dict[str, TripEvent]
+    ) -> list[Risk]:
+        risks: list[Risk] = []
+        ordered = sorted(trip.events, key=lambda item: item.start)
+        for index, event in enumerate(ordered):
+            for other in ordered[index + 1 :]:
+                if other.start >= event.end:
+                    break
+                # Accommodation represents a stay window and is allowed to
+                # overlap meals/activities inside that stay.
+                if EventType.ACCOMMODATION in {event.event_type, other.event_type}:
+                    continue
+                risks.append(
+                    Risk(
+                        id=f"schedule:overlap:{event.id}:{other.id}",
+                        risk_type=RiskType.SCHEDULE,
+                        severity=RiskSeverity.HIGH,
+                        score=75,
+                        title="行程时间发生重叠",
+                        description=f"“{event.title}”与“{other.title}”在时间上重叠。",
+                        affected_event_ids=[event.id, other.id],
+                        evidence=[
+                            f"{event.id}={event.start.isoformat()} 至 {event.end.isoformat()}",
+                            f"{other.id}={other.start.isoformat()} 至 {other.end.isoformat()}",
+                        ],
+                        recommendation="调整其中一个事件的起止时间，再重新校验交通与预算。",
+                    )
+                )
+            for dependency_id in event.depends_on:
+                dependency = event_by_id[dependency_id]
+                if event.start < dependency.end:
+                    risks.append(
+                        Risk(
+                            id=f"schedule:dependency_order:{dependency.id}:{event.id}",
+                            risk_type=RiskType.SCHEDULE,
+                            severity=RiskSeverity.HIGH,
+                            score=75,
+                            title="依赖事件尚未结束",
+                            description=f"“{event.title}”开始时，其前置事件“{dependency.title}”尚未结束。",
+                            affected_event_ids=[dependency.id, event.id],
+                            evidence=[
+                                f"前置结束={dependency.end.isoformat()}",
+                                f"当前开始={event.start.isoformat()}",
+                            ],
+                            recommendation="修正事件顺序或时间，确保前置事件完成后再开始。",
+                        )
+                    )
         return risks
 
     def _date_risks(self, trip: Trip) -> list[Risk]:
@@ -318,6 +374,9 @@ class RiskEngine:
                 continue
             evidence = event.metadata.get("amap_weather_evidence")
             if not isinstance(evidence, dict):
+                warnings.append(
+                    f"{event.id} 为天气敏感活动，但尚无对应日期的高德天气证据。"
+                )
                 continue
             if evidence.get("status") != "verified":
                 warnings.append(

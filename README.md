@@ -21,16 +21,17 @@ license: MIT License
 
 TripTwin 将零散行程解析为结构化 `TripGraph`，使用确定性规则发现时间、日期、预算、体力和天气风险，再基于飞猪旅行真实候选生成可验证的 Plan B。它只做风险提示与候选推荐，**不会自动预订或支付**。
 
-> 当前状态：Stage 1–6 已完成；[GitHub 公共仓库](https://github.com/amazingLH/triptwin-travel-guardian)已发布，ModelScope 公网 Demo 正在部署。
+> 当前状态：最终发布候选版；[GitHub 公共仓库](https://github.com/amazingLH/triptwin-travel-guardian)与 [ModelScope 公网 Demo](https://modelscope.cn/studios/L666H666Better/triptwin-travel-guardian)均已发布。
 
 ## 作品亮点
 
 - **旅行数字孪生**：把车次、酒店、景点、同行人和约束统一为可计算的 TripGraph。
 - **确定性风险引擎**：风险结论来自显式规则和证据，不让模型自由编造。
 - **真实工具闭环**：百炼 Managed Agent 调用飞猪旅行 Skill/CLI 与高德地图 MCP。
-- **受约束的 Plan B**：保护已订车次与酒店，限制增量成本，并保留候选来源链接。
-- **主动巡检**：Managed Agent Deployment 可按同一基线重复运行并生成审计记录。
+- **受约束的 Plan B**：候选必须属于当前行程、总增量不超限、受保护订单不变，并通过 TripGraph 回放复检。
+- **真实巡检**：用户行程使用独立 Managed Agent 会话实时调用高德 MCP 与 FlyAI；失败时停止，不借用示例结果。
 - **隐私与可追溯**：密钥不入库；原始上传图片不进入浏览器历史；页面明确数据时效和未核验范围。
+- **可落地交互**：支持 1–5 张截图合并、结构化校对、独立历史会话删除/清空，以及 JSON/ICS 导出。
 
 ## 架构
 
@@ -58,7 +59,7 @@ LLM 负责理解、编排和解释；TripGraph、风险规则、候选校验与�
 - FlyAI：累计 7 条有效真实查询证据，命令均为 `exit_code=0`、业务 `status=0`。
 - 高德 MCP：路线、距离、天气及 POI 搜索均已真实调用；未覆盖行程日期的天气不会被猜测。
 - Deployment：首次手动巡检以 `end_turn` 正常结束，结构化记录见 `docs/evidence/stage6-deployment/run.json`。
-- 自动化测试：运行 `pytest` 查看当前准确数量。
+- 自动化测试与离线验收：由 GitHub Actions 在 Python 3.11/3.12 自动执行。
 
 ## 本地运行
 
@@ -92,6 +93,11 @@ TRIPTWIN_BROWSER_QUESTION_LIMIT=5
 TRIPTWIN_BROWSER_IMAGE_LIMIT=2
 TRIPTWIN_GLOBAL_QUESTION_LIMIT=40
 TRIPTWIN_GLOBAL_IMAGE_LIMIT=5
+TRIPTWIN_BROWSER_AGENT_LIMIT=1
+TRIPTWIN_GLOBAL_AGENT_LIMIT=8
+TRIPTWIN_BROWSER_STATE_SECRET=请生成至少32字节随机值
+TRIPTWIN_RATE_LIMIT_SALT=请生成另一段至少32字节随机值
+TRIPTWIN_USAGE_COUNTER_PATH=/tmp/triptwin-usage.sqlite3
 ```
 
 然后启动：
@@ -108,7 +114,7 @@ python app.py
 python -m pytest -q
 ```
 
-测试覆盖 TripGraph 校验、风险规则、候选约束、百炼事件解析、密钥脱敏、动态问答、会话隔离、高德证据与 Deployment 展示。
+测试覆盖 TripGraph 引用与依赖环、时间重叠、风险规则、跨行程候选阻断、总预算与回放校验、百炼事件解析、密钥脱敏、动态问答、多会话隔离、高德证据与 Deployment 展示。另可运行 `python scripts/evaluate_offline.py` 执行凭据无关的发布验收。
 
 ## ModelScope Studio 部署
 
@@ -120,6 +126,8 @@ FLYAI_API_KEY
 BAILIAN_WORKSPACE_ID
 BAILIAN_AGENT_ID
 BAILIAN_ENVIRONMENT_ID
+TRIPTWIN_BROWSER_STATE_SECRET
+TRIPTWIN_RATE_LIMIT_SALT
 ```
 
 模型名称不是密钥，可按需在普通环境变量中覆盖；未配置时默认使用
@@ -136,8 +144,10 @@ DASHSCOPE_VISION_MODEL=qwen3.7-flash
 
 - 候选价格、库存、天气和交通结果都有时效性，页面展示的是对应获取时间的证据。
 - 高德地理编码可能返回行政区级结果；精度不足时会明确告警，不冒充精确 POI。
-- 浏览器历史仅保存在当前浏览器，最多 20 个会话；云端重启不会提供跨设备账户历史。
-- 公开站点中的自由问答和用户自传图片解析会使用部署者配置的百炼额度；合成示例、确定性风险检查、Plan B、缓存巡检和会话管理不调用模型。
+- 浏览器历史仅保存在当前浏览器，最多 20 个会话；支持逐个删除和一键清空，不提供跨设备账户历史。
+- 公开站点中的自由问答、用户自传图片解析，以及用户行程的实时高德/FlyAI 核验会使用部署者额度；合成示例与本地确定性风险检查不调用模型。
+- 限流计数使用 SQLite 原子事务，匿名访客标识只保存加盐哈希，不保存 IP、问题或图片；容器重建会清空本地计数，因此仍应在百炼侧开启余额/额度硬保护。
+- 用户上传行程若没有当前会话的实时候选证据，系统不会展示公开杭州案例的 Plan B 或工具轨迹。
 - 作品不执行预订、支付、退改或订单操作。
 - `examples/` 与演示图片均为合成数据，不包含真实个人信息。
 
@@ -147,6 +157,7 @@ DASHSCOPE_VISION_MODEL=qwen3.7-flash
 app.py                      Gradio 入口
 src/triptwin/               TripGraph、风险、Agent 与展示服务
 tests/                      自动化测试
+evals/                      离线发布验收清单
 examples/                   合成黄金行程
 assets/                     合成演示图片
 docs/evidence/              脱敏的真实调用证据

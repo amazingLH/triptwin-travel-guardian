@@ -130,3 +130,13 @@ def test_weather_sensitive_flag_is_reserved_for_stage_six(golden_trip: Trip) -> 
 
     assert all(risk.risk_type.value != "weather" for risk in analysis.risks)
 
+
+def test_non_accommodation_schedule_overlap_is_detected() -> None:
+    payload = load_payload("hangzhou_golden_trip.json")
+    payload["events"][2]["start"] = "2026-10-18T11:00:00+08:00"
+    payload["events"][2]["end"] = "2026-10-18T12:00:00+08:00"
+
+    analysis = RiskEngine().analyze(Trip.model_validate(payload))
+
+    assert any(risk.risk_type is RiskType.SCHEDULE for risk in analysis.risks)
+

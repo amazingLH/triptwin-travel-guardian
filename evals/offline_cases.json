@@ -1,0 +1,18 @@
+[
+  {
+    "name": "golden-five-risk-families",
+    "fixture": "examples/hangzhou_golden_trip.json",
+    "expected_risk_ids": [
+      "time_connection:train-sh-hz:west-lake-boat",
+      "date_consistency:missing_accommodation_nights",
+      "budget:projected_total",
+      "mobility:2026-10-18",
+      "mobility:2026-10-19"
+    ]
+  },
+  {
+    "name": "plan-b-fixture-remains-parseable",
+    "fixture": "examples/hangzhou_plan_b_trip.json",
+    "minimum_risk_count": 0
+  }
+]

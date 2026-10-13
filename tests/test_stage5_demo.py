@@ -41,7 +41,8 @@ def test_loading_example_marks_chat_as_deterministic() -> None:
 
     image, _, state = app.load_example()
 
-    assert Path(image) == SAMPLE_IMAGE_PATH
+    assert len(image) == 1
+    assert Path(image[0]) == SAMPLE_IMAGE_PATH
     assert state == {"trip_source": "synthetic_example"}
 
 
@@ -86,6 +87,15 @@ def test_uploaded_trip_never_reuses_golden_cloud_evidence() -> None:
     assert "drun_" not in inspection_panel
 
 
+def test_uploaded_trip_without_live_candidates_never_gets_golden_plan_b() -> None:
+    trip = load_cached_vision()["trip"]
+
+    rendered = plan_b_markdown(trip, include_cached_amap=False)
+
+    assert "没有专属的实时 FlyAI 候选证据" in rendered
+    assert "如家精选" not in rendered
+
+
 def test_legacy_blank_history_is_sanitized_on_restore() -> None:
     import app
 
@@ -98,10 +108,32 @@ def test_legacy_blank_history_is_sanitized_on_restore() -> None:
     }
     restored = app._session_view(session)
 
-    assert "等待上传行程" in restored[-2]
-    assert "杭州东站" not in restored[-2]
-    assert "等待上传行程" in restored[-1]
-    assert "drun_" not in restored[-1]
+    assert "等待上传行程" in restored[-4]
+    assert "杭州东站" not in restored[-4]
+    assert "等待上传行程" in restored[-3]
+    assert "drun_" not in restored[-3]
+
+
+def test_current_uploaded_live_panel_survives_its_own_session_restore() -> None:
+    import app
+    from triptwin.live_context import AmapInspection
+    from triptwin.demo_service import AMAP_INSPECTION_PATH, load_json
+
+    inspection = AmapInspection.model_validate(load_json(AMAP_INSPECTION_PATH))
+    state = {
+        "trip": load_cached_vision()["trip"],
+        "trip_source": "uploaded_image",
+        "live_inspection": inspection.model_dump(mode="json"),
+    }
+    amap_panel = app._live_amap_panel(inspection)
+    saved = app._session_snapshot(
+        state, "ok", False, "risk", "plan", "trace", [], amap_panel,
+        "### ⏱️ 当前上传行程 · 实时巡检\n\n已完成",
+    )
+    restored = app._session_view({"snapshot": saved})
+
+    assert "杭州东站" in restored[-4]
+    assert "已完成" in restored[-3]
 
 
 def test_golden_demo_is_repeatable_three_times() -> None:

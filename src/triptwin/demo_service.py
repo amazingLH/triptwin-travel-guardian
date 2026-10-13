@@ -7,6 +7,7 @@ import copy
 from html import escape
 from pathlib import Path
 from typing import Any
+from datetime import timedelta, timezone
 
 from triptwin.candidate_validator import validate_candidate_artifact
 from triptwin.live_context import AmapInspection, apply_amap_evidence
@@ -25,6 +26,7 @@ AMAP_INSPECTION_PATH = ROOT / "docs" / "evidence" / "stage6-amap" / "inspection.
 DEPLOYMENT_EVIDENCE_PATH = (
     ROOT / "docs" / "evidence" / "stage6-deployment" / "run.json"
 )
+CHINA_TIME = timezone(timedelta(hours=8))
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -103,6 +105,7 @@ def risk_markdown(
         "budget": "预算",
         "mobility": "体力",
         "weather": "天气",
+        "schedule": "日程",
     }
     lines = [
         f"### 检出 {analysis.risk_count} 个风险 · 总分 {analysis.total_risk_score}",
@@ -121,21 +124,37 @@ def risk_markdown(
 
 
 def plan_b_markdown(
-    trip_payload: dict[str, Any], *, include_cached_amap: bool = True
+    trip_payload: dict[str, Any], *, include_cached_amap: bool = True,
+    candidate_artifact: dict[str, Any] | None = None,
+    require_simulation: bool = False,
 ) -> str:
     trip, analysis = analyze_trip(
         trip_payload, include_cached_amap=include_cached_amap
     )
+    if analysis.risk_count == 0:
+        return (
+            "### ✅ 当前无需 Plan B\n\n"
+            "现有 TripGraph 未触发确定性风险规则。价格、库存和天气仍可能变化，"
+            "出发前请重新核验；TripTwin 不会自动预订或支付。"
+        )
+    artifact = candidate_artifact
+    if artifact is None and include_cached_amap:
+        artifact = load_json(CANDIDATES_PATH)
+    if artifact is None:
+        return (
+            "### Plan B 尚未生成\n\n"
+            "当前行程没有专属的实时 FlyAI 候选证据。为避免把公开杭州示例套用到您的行程，"
+            "TripTwin 不会展示静态候选；请执行实时核验后再生成。"
+        )
     validation = validate_candidate_artifact(
-        trip, analysis, load_json(CANDIDATES_PATH)
+        trip, analysis, artifact, require_simulation=require_simulation
     )
     if not validation.valid:
         reasons = "；".join(validation.rejection_reasons)
         return f"### Plan B 尚未通过本地验证\n\n{reasons}"
     rows = []
-    total_extra = 0
+    total_extra = validation.total_extra_cost_cny
     for selection in validation.selections:
-        total_extra += selection.extra_cost_cny
         rows.append(
             f"| {escape(selection.event_id)} | "
             f"[{escape(selection.name)}]({selection.source_url}) | "
@@ -150,28 +169,52 @@ def plan_b_markdown(
             "",
             f"- 风险覆盖：**{analysis.risk_count} → 0 个未覆盖风险**",
             f"- 入选候选增量合计：**¥{total_extra}**（上限 ¥{trip.constraints.max_plan_b_extra_cost_cny}）",
-            "- `train-sh-hz` 与 `hotel-west-lake` 保持不变",
+            f"- 候选获取时间：`{escape(str(artifact.get('fetched_at') or '历史合成证据'))}`；价格与库存以下单页为准",
+            "- 所有受保护节点保持不变",
             "- 当前仅为候选方案，**未执行预订或支付**",
         ]
     )
 
 
-def tool_trace_markdown() -> str:
-    candidates = load_json(CANDIDATES_PATH)
-    commands = candidates.get("flyai_commands", [])
+def tool_trace_markdown(
+    candidate_artifact: dict[str, Any] | None = None,
+    inspection: AmapInspection | None = None,
+) -> str:
+    candidates = (
+        candidate_artifact
+        if candidate_artifact is not None
+        else load_json(CANDIDATES_PATH)
+    )
+    raw_commands = candidates.get("flyai_commands", [])
+    commands = (
+        [command for command in raw_commands if isinstance(command, dict)]
+        if isinstance(raw_commands, list)
+        else []
+    )
     lines = [
         "### Agent / FlyAI 工具轨迹",
         f"- 有效 FlyAI 命令证据：**{len(commands)} 条**",
-        "- 景点查询 3 条；酒店查询 4 条；酒店候选 6 个",
         "- 所有命令均为 `exit_code=0`、`status=0`",
     ]
+    if candidate_artifact is None:
+        lines.insert(2, "- 合成示例证据：景点查询 3 条；酒店查询 4 条；酒店候选 6 个")
+    else:
+        categories = sorted(
+            {
+                str(command.get("command", "")).split("flyai ", 1)[1].split()[0]
+                for command in commands
+                if "flyai " in str(command.get("command", ""))
+            }
+        )
+        lines.insert(2, "- 本次查询类型：" + ("、".join(categories) or "无已验证查询"))
     for command in commands:
         command_text = str(command.get("command", "")).replace("\n", " ")
         if len(command_text) > 115:
             command_text = command_text[:112] + "..."
         lines.append(f"- `{command_text}`")
-    if AMAP_INSPECTION_PATH.is_file():
+    if inspection is None and candidate_artifact is None and AMAP_INSPECTION_PATH.is_file():
         inspection = AmapInspection.model_validate(load_json(AMAP_INSPECTION_PATH))
+    if inspection is not None:
         lines.extend(
             [
                 "",
@@ -184,13 +227,14 @@ def tool_trace_markdown() -> str:
     return "\n".join(lines)
 
 
-def amap_inspection_markdown() -> str:
-    if not AMAP_INSPECTION_PATH.is_file():
+def amap_inspection_markdown(inspection: AmapInspection | None = None) -> str:
+    if inspection is None and not AMAP_INSPECTION_PATH.is_file():
         return "### 空间与天气核验\n\n尚未保存高德 MCP 证据。"
-    inspection = AmapInspection.model_validate(load_json(AMAP_INSPECTION_PATH))
+    if inspection is None:
+        inspection = AmapInspection.model_validate(load_json(AMAP_INSPECTION_PATH))
     lines = [
         "### 🛰️ 空间与天气核验",
-        f"- 最近获取：**{inspection.captured_at.astimezone():%Y-%m-%d %H:%M:%S}**",
+        f"- 最近获取：**{inspection.captured_at.astimezone(CHINA_TIME):%Y-%m-%d %H:%M:%S}**",
         f"- 会话状态：`{inspection.run_status}` · 错误 **{inspection.error_count}**",
     ]
     if inspection.route:
@@ -212,9 +256,7 @@ def amap_inspection_markdown() -> str:
         if weather.trip_dates_covered:
             lines.append("- ✅ 天气已覆盖行程日期，可进入天气风险规则。")
         else:
-            lines.append(
-                "- ⚠️ 行程为 10 月 18–20 日，当前预报未覆盖；天气保持**未核验**，不进行猜测。"
-            )
+            lines.append("- ⚠️ 当前预报未覆盖完整行程；未覆盖日期保持**未核验**，不进行猜测。")
     return "\n".join(lines)
 
 
@@ -274,13 +316,25 @@ def run_golden_demo() -> dict[str, Any]:
 
 
 def chat_context(
-    trip_payload: dict[str, Any], *, include_cached_amap: bool = True
+    trip_payload: dict[str, Any], *, include_cached_amap: bool = True,
+    candidate_artifact: dict[str, Any] | None = None,
+    amap_inspection: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     trip, analysis = analyze_trip(
         trip_payload, include_cached_amap=include_cached_amap
     )
-    validation = validate_candidate_artifact(
-        trip, analysis, load_json(CANDIDATES_PATH)
+    artifact = candidate_artifact
+    if artifact is None and include_cached_amap:
+        artifact = load_json(CANDIDATES_PATH)
+    validation = (
+        validate_candidate_artifact(
+            trip,
+            analysis,
+            artifact,
+            require_simulation=bool(candidate_artifact is not None and not include_cached_amap),
+        )
+        if artifact is not None
+        else None
     )
     return {
         "trip": {
@@ -302,23 +356,25 @@ def chat_context(
             for risk in analysis.risks
         ],
         "plan_b": {
-            "valid": validation.valid,
-            "unresolved_risk_ids": validation.unresolved_risk_ids,
+            "valid": validation.valid if validation else False,
+            "unresolved_risk_ids": validation.unresolved_risk_ids if validation else [risk.id for risk in analysis.risks],
             "protected_event_ids_untouched": (
-                validation.protected_event_ids_untouched
+                validation.protected_event_ids_untouched if validation else True
             ),
             "selections": [
                 selection.model_dump(mode="json")
-                for selection in validation.selections
+                for selection in (validation.selections if validation else [])
             ],
         },
         "tool_evidence": {
             "successful_flyai_commands": len(
-                load_json(CANDIDATES_PATH).get("flyai_commands", [])
+                artifact.get("flyai_commands", []) if artifact else []
             ),
-            "source": "official FlyAI Skill",
+            "source": "official FlyAI Skill" if artifact else "not_run_for_current_trip",
             "amap": (
-                load_json(AMAP_INSPECTION_PATH)
+                amap_inspection
+                if isinstance(amap_inspection, dict)
+                else load_json(AMAP_INSPECTION_PATH)
                 if include_cached_amap and AMAP_INSPECTION_PATH.is_file()
                 else {"status": "not_run_for_current_trip"}
             ),

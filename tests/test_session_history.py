@@ -6,6 +6,8 @@ from triptwin.session_history import (
     history_choices,
     save_active_session,
     switch_session,
+    delete_session,
+    clear_sessions,
 )
 
 
@@ -85,3 +87,15 @@ def test_history_does_not_persist_uploaded_image_paths() -> None:
         item for item in store["sessions"] if item["id"] == store["active_id"]
     )
     assert "image_path" not in active["snapshot"]
+
+
+def test_sessions_can_be_deleted_or_cleared() -> None:
+    store, first = ensure_active_session(None)
+    store, second = create_session(store)
+    store, active = delete_session(store, second["id"])
+    assert active["id"] == first["id"]
+    assert len(store["sessions"]) == 1
+
+    store, fresh = clear_sessions(store)
+    assert len(store["sessions"]) == 1
+    assert fresh["id"] != first["id"]

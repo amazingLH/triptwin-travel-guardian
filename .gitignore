@@ -17,6 +17,9 @@ venv/
 .env.*
 !.env.example
 .stage4-last-session
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
 *.pem
 *.key
 

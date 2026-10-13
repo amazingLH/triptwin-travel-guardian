@@ -92,6 +92,30 @@ def switch_session(
     return store, copy.deepcopy(target)
 
 
+def delete_session(value: Any, session_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Delete one browser-local session and select/create a safe replacement."""
+
+    store = ensure_store(value)
+    store["sessions"] = [
+        session for session in store["sessions"] if session["id"] != session_id
+    ]
+    if store["sessions"]:
+        store["active_id"] = store["sessions"][-1]["id"]
+        return store, copy.deepcopy(store["sessions"][-1])
+    store["active_id"] = None
+    return create_session(store)
+
+
+def clear_sessions(value: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Clear all browser-local history and start a fresh isolated session."""
+
+    store = ensure_store(value)
+    store["sessions"] = []
+    store["active_id"] = None
+    store["answer_cache"] = {}
+    return create_session(store)
+
+
 def find_session(value: Any, session_id: Any) -> dict[str, Any] | None:
     store = ensure_store(value)
     return _find_in_store(store, session_id)

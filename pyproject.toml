@@ -4,14 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "triptwin"
-version = "0.1.0"
-description = "TripGraph and deterministic travel-risk engine for TripTwin"
+version = "1.0.0"
+description = "Evidence-grounded travel digital twin and guarded replanning agent"
 requires-python = ">=3.11"
 dependencies = [
-  "gradio>=5,<7",
-  "pydantic>=2.9,<3",
-  "httpx[socks]>=0.27,<1",
-  "python-dotenv>=1.0,<2",
+  "gradio==6.29.1",
+  "pydantic==2.14.1",
+  "httpx[socks]==0.28.1",
+  "python-dotenv==1.2.4",
+  "Pillow==12.3.0",
 ]
 
 [project.scripts]

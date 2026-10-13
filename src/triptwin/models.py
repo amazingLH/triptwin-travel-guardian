@@ -30,6 +30,7 @@ class RiskType(StrEnum):
     BUDGET = "budget"
     MOBILITY = "mobility"
     WEATHER = "weather"
+    SCHEDULE = "schedule"
 
 
 class RiskSeverity(StrEnum):
@@ -180,6 +181,38 @@ class Trip(BaseModel):
                 )
             if event.id in references:
                 raise ValueError(f"event {event.id!r} cannot depend on itself")
+
+        # A dependency graph can be invalid even when every referenced id
+        # exists.  Reject indirect cycles (A -> B -> A, etc.) before any
+        # downstream risk analysis or replanning is attempted.
+        graph = {
+            event.id: set(event.depends_on)
+            | ({event.transfer_from_event_id} if event.transfer_from_event_id else set())
+            for event in self.events
+        }
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def visit(event_id: str, path: list[str]) -> None:
+            if event_id in visiting:
+                cycle_start = path.index(event_id)
+                cycle = path[cycle_start:] + [event_id]
+                raise ValueError(
+                    "event dependency graph contains a cycle: "
+                    + " -> ".join(cycle)
+                )
+            if event_id in visited:
+                return
+            visiting.add(event_id)
+            path.append(event_id)
+            for dependency_id in graph[event_id]:
+                visit(dependency_id, path)
+            path.pop()
+            visiting.remove(event_id)
+            visited.add(event_id)
+
+        for event_id in event_ids:
+            visit(event_id, [])
 
         return self
 

@@ -10,6 +10,43 @@ from dotenv import dotenv_values
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 
+class ModelSettings(BaseModel):
+    """Credentials needed for direct text/vision model calls only."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    dashscope_api_key: SecretStr = Field(min_length=1)
+    bailian_workspace_id: str = Field(min_length=1)
+    dashscope_text_model: str = Field(default="qwen3.7-flash", min_length=1)
+    dashscope_vision_model: str = Field(default="qwen3.7-flash", min_length=1)
+
+    @classmethod
+    def from_env(cls, path: str | Path = ".env") -> "ModelSettings":
+        env_path = Path(path)
+        file_values: Mapping[str, str | None] = (
+            dotenv_values(env_path) if env_path.is_file() else {}
+        )
+        required = ("DASHSCOPE_API_KEY", "BAILIAN_WORKSPACE_ID")
+        values = {name: os.getenv(name) or file_values.get(name) for name in required}
+        missing = [name for name in required if not (values.get(name) or "").strip()]
+        if missing:
+            raise ValueError("模型调用缺少有效配置：" + ", ".join(missing))
+        return cls(
+            dashscope_api_key=(values["DASHSCOPE_API_KEY"] or "").strip(),
+            bailian_workspace_id=(values["BAILIAN_WORKSPACE_ID"] or "").strip(),
+            dashscope_text_model=(
+                os.getenv("DASHSCOPE_TEXT_MODEL")
+                or file_values.get("DASHSCOPE_TEXT_MODEL")
+                or "qwen3.7-flash"
+            ).strip(),
+            dashscope_vision_model=(
+                os.getenv("DASHSCOPE_VISION_MODEL")
+                or file_values.get("DASHSCOPE_VISION_MODEL")
+                or "qwen3.7-flash"
+            ).strip(),
+        )
+
+
 class Settings(BaseModel):
     """Secrets and resource identifiers required by Managed Agents.
 
