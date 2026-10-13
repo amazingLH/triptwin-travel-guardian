@@ -113,3 +113,14 @@ def test_pending_draft_cannot_check_risks_or_export():
     assert "已构建" in status
     assert "G8156" in timeline
     assert "trip" in ready and "draft_trip" not in ready
+
+
+def test_uploaded_image_parsing_does_not_require_privacy_checkbox(monkeypatch, tmp_path):
+    from app import build_twin_guarded
+    path = tmp_path / "ordinary-ticket.png"
+    path.write_bytes(b"test-only image placeholder")
+    monkeypatch.setattr("app.build_twin", lambda paths: ("{}", [], "", "", {"draft_trip": valid_order()}))
+    monkeypatch.setattr("app.reserve_global", lambda kind: (True, 1, 5))
+    result = build_twin_guarded([str(path)], False, None)
+    assert "draft_trip" in result[4]
+    assert result[5]["usage"]["images"] == 1

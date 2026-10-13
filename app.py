@@ -400,8 +400,6 @@ def build_twin_guarded(
     client_reserved = False
     global_reserved = False
     if not _is_functional_example(paths):
-        if not privacy_confirmed:
-            raise gr.Error("请先确认图片已遮挡身份证号、手机号、票号等敏感信息。")
         allowed, usage = browser_can_consume(store.get("usage"), "images")
         if not allowed:
             raise gr.Error(
@@ -1336,7 +1334,7 @@ def create_app() -> gr.Blocks:
                     preview = gr.HTML(value="", visible=False)
                     clear_import_button = gr.Button("清空已导入行程", variant="secondary")
             privacy_confirmed = gr.Checkbox(
-                label="自行上传前，我已遮挡身份证号、手机号和票号（合成示例无需勾选）"
+                label="隐私提醒状态", visible=False
             )
             gr.Markdown("支持 12306 车票、机票、酒店订单或完整行程截图，**无需固定模板**。截图缺少的必要信息会在第 2 步提示手动补充；也可清空后上传更详细的行程截图。请裁掉广告并遮挡姓名、订单号、流水号等信息。")
         with gr.Column(elem_id="step-build", elem_classes=["step-card"]):
