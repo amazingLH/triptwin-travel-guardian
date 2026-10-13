@@ -215,12 +215,15 @@ def validate_candidate_artifact(
                 if proposed is None:
                     continue
                 if selection.event_id.startswith("additive:"):
-                    events.append(proposed)
+                    events.append({**proposed, "proposed_extra_cost_cny": "0"})
                     continue
                 index = next(
                     i for i, event in enumerate(events) if event["id"] == selection.event_id
                 )
                 merged = {**events[index], **proposed, "id": selection.event_id}
+                if "cost_cny" in proposed:
+                    # The quoted new total already includes the replacement price.
+                    merged["proposed_extra_cost_cny"] = "0"
                 events[index] = merged
             simulated_trip = Trip.model_validate(simulated_payload)
             simulated_analysis = RiskEngine().analyze(simulated_trip)
@@ -234,6 +237,10 @@ def validate_candidate_artifact(
                 )
             if new_risks:
                 rejections.append("候选回放产生了新风险：" + ", ".join(new_risks))
+            if trip.constraints.budget_cny is None or simulated_analysis.budget.status == "indeterminate":
+                rejections.append("总预算或候选价格未核验，不能确认方案满足预算。")
+            elif analysis.budget.known_cost_cny + total_extra > trip.constraints.budget_cny:
+                rejections.append("原计划已知费用与候选增量合计超过总预算（未假设实际退款已到账）。")
         except (ValueError, StopIteration) as exc:
             rejections.append(f"候选无法回放为有效 TripGraph：{exc}")
 
@@ -273,6 +280,8 @@ def _validate_option(
     if (
         parsed_url.scheme != "https"
         or parsed_url.hostname != "router.feizhu.com"
+        or parsed_url.username is not None
+        or parsed_url.password is not None
         or any(character in source_url for character in "\r\n[]()<> ")
     ):
         return None
@@ -280,7 +289,7 @@ def _validate_option(
         extra_cost = Decimal(str(option.get("extra_cost_cny", 0)))
     except (InvalidOperation, ValueError):
         return None
-    if extra_cost < 0 or extra_cost > max_extra_cost:
+    if not extra_cost.is_finite() or extra_cost < 0 or extra_cost > max_extra_cost:
         return None
     if require_simulation and option.get("source") != "flyai":
         return None
@@ -301,7 +310,8 @@ def _validate_option(
 
 def _decimal_or_zero(value: Any) -> Decimal:
     try:
-        return Decimal(str(value)) if value is not None else Decimal("0")
+        result = Decimal(str(value)) if value is not None else Decimal("0")
+        return result if result.is_finite() else Decimal("0")
     except (InvalidOperation, ValueError):
         return Decimal("0")
 

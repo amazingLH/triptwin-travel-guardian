@@ -58,10 +58,16 @@ class Location(BaseModel):
 class TravelerProfile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    adults: int = Field(default=1, ge=1)
+    adults: int = Field(default=1, ge=0)
     children: int = Field(default=0, ge=0)
     seniors: int = Field(default=0, ge=0)
     mobility_limitations: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_party(self) -> TravelerProfile:
+        if self.adults + self.children + self.seniors < 1:
+            raise ValueError("同行总人数至少为 1 人")
+        return self
 
     @property
     def needs_accessible_pacing(self) -> bool:
@@ -157,19 +163,23 @@ class Trip(BaseModel):
     end: AwareDatetime
     travelers: TravelerProfile
     constraints: TripConstraints
-    events: list[TripEvent] = Field(min_length=1)
+    events: list[TripEvent] = Field(min_length=1, max_length=100)
     risks: list[Risk] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_graph(self) -> Trip:
         if self.end <= self.start:
             raise ValueError("trip end must be later than trip start")
+        if (self.end - self.start).days > 366:
+            raise ValueError("单次旅行跨度不能超过 366 天，请拆分为多个会话")
 
         event_ids = [event.id for event in self.events]
         if len(event_ids) != len(set(event_ids)):
             raise ValueError("event ids must be unique")
 
         known_ids = set(event_ids)
+        if self.constraints.protected_event_ids - known_ids:
+            raise ValueError("受保护行程引用了不存在的事件，请核对 protected_event_ids")
         for event in self.events:
             references = set(event.depends_on)
             if event.transfer_from_event_id:

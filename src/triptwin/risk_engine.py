@@ -7,7 +7,7 @@ same input always produces the same risk decisions.
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, time
 from decimal import Decimal
 
 from triptwin.models import (
@@ -52,6 +52,9 @@ class RiskEngine:
                 ))
         risks.extend(self._date_risks(trip))
         budget, budget_risks, warnings = self._budget_analysis(trip)
+        inferred_risks, inferred_warnings = self._unlinked_transport_connections(trip)
+        risks.extend(inferred_risks)
+        warnings.extend(inferred_warnings)
         risks.extend(budget_risks)
         risks.extend(self._mobility_risks(trip))
         weather_risks, weather_warnings = self._weather_risks(trip)
@@ -151,6 +154,34 @@ class RiskEngine:
             )
         return risks
 
+    def _unlinked_transport_connections(self, trip: Trip) -> tuple[list[Risk], list[str]]:
+        """Do not silently skip ticket connections when the extractor omits links."""
+        ordered = sorted(trip.events, key=lambda event: event.start)
+        risks, warnings = [], []
+        for previous, current in zip(ordered, ordered[1:]):
+            if previous.event_type is not EventType.TRANSPORT or current.event_type is not EventType.TRANSPORT:
+                continue
+            if current.start < previous.end:
+                continue
+            origin, destination = current.origin, previous.destination
+            if not origin or not destination:
+                warnings.append(f"{previous.title} → {current.title}：缺少衔接站点，交通衔接未核验。")
+                continue
+            minutes = int((current.start - previous.end).total_seconds() // 60)
+            if origin.name != destination.name or origin.city != destination.city:
+                if not current.transfer_from_event_id or not current.travel_minutes_from_previous:
+                    warnings.append(f"{previous.title} → {current.title}：到达地点 {destination.name} 与下一段出发地点 {origin.name} 不同，间隔 {minutes} 分钟；尚无两地交通耗时证据，衔接未核验。")
+            elif not current.transfer_from_event_id and minutes < trip.constraints.minimum_connection_buffer_minutes:
+                risks.append(Risk(
+                    id=f"time_connection:{previous.id}:{current.id}", risk_type=RiskType.TIME_CONNECTION,
+                    severity=RiskSeverity.MEDIUM, score=60, title="同站换乘缓冲不足",
+                    description=f"{destination.name} 两段车票间隔仅 {minutes} 分钟，低于设定缓冲。",
+                    affected_event_ids=[previous.id, current.id],
+                    evidence=[f"可用间隔={minutes}分钟", f"安全缓冲={trip.constraints.minimum_connection_buffer_minutes}分钟"],
+                    recommendation="确认站内换乘条件；必要时更换后续车次，不能仅修改票面时间。",
+                ))
+        return risks, warnings
+
     def _schedule_risks(
         self, trip: Trip, event_by_id: dict[str, TripEvent]
     ) -> list[Risk]:
@@ -177,7 +208,11 @@ class RiskEngine:
                             f"{event.id}={event.start.isoformat()} 至 {event.end.isoformat()}",
                             f"{other.id}={other.start.isoformat()} 至 {other.end.isoformat()}",
                         ],
-                        recommendation="调整其中一个事件的起止时间，再重新校验交通与预算。",
+                        recommendation=(
+                            "选择保留其中一段有效交通，或查询其他时刻的车次/航班；实际退改请自行办理，不能只修改截图中的时间。"
+                            if EventType.TRANSPORT in {event.event_type, other.event_type}
+                            else "调整其中一个活动的安排，再重新校验交通与预算。"
+                        ),
                     )
                 )
             for dependency_id in event.depends_on:
@@ -233,6 +268,11 @@ class RiskEngine:
             if not any(
                 hotel.start.date() <= night < hotel.end.date()
                 for hotel in accommodations
+            )
+            and not any(
+                event.event_type is EventType.TRANSPORT
+                and event.start < datetime.combine(night + timedelta(days=1), time.min, tzinfo=trip.start.tzinfo) < event.end
+                for event in trip.events
             )
         ]
         if missing_nights:
@@ -320,7 +360,7 @@ class RiskEngine:
                     affected_event_ids=[
                         event.id
                         for event in trip.events
-                        if event.proposed_extra_cost_cny > 0
+                        if event.proposed_extra_cost_cny > 0 or (exceeds_total and event.cost_cny is not None and event.cost_cny > 0)
                     ],
                     evidence=evidence,
                     recommendation="选择更低成本的局部替代项，不改变用户明确要求保留的节点。",

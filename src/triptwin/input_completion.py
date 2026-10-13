@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import json
+from datetime import datetime
 from typing import Any
 
 from pydantic import ValidationError
@@ -18,7 +19,36 @@ LABELS = {
     "seniors": "老人数", "start": "开始时间（如 2026-10-20T20:16:00+08:00）",
     "end": "结束时间（带 +08:00 时区）", "cost_cny": "订单/活动价格（元）",
     "city": "城市", "name": "站点或地点名称", "title": "行程名称",
+    "event_type": "行程类型（transport 交通、accommodation 住宿、activity 活动、meal 餐饮、transfer 换乘）",
+    "id": "内部行程编号（如 event-1）", "mobility_limitations": "行动限制（列表；无则填写 []）",
+    "depends_on": "前置行程编号（列表，如 [\"event-1\"]；没有则 []）",
+    "protected_event_ids": "必须保留的行程编号（列表；没有则 []）",
+    "transfer_from_event_id": "上一段衔接行程编号（不衔接则 null）",
 }
+
+
+def validation_message(exc: ValidationError) -> str:
+    error = exc.errors()[0]
+    loc, message = error["loc"], error["msg"]
+    translations = {
+        "event end must be later": "结束时间必须晚于开始时间；跨日到达请填写次日日期。",
+        "trip end must be later": "旅行结束时间必须晚于开始时间。",
+        "event ids must be unique": "各项行程的内部编号不能重复，请在高级校对中修改重复编号。",
+        "references unknown event ids": "前置或衔接行程编号不存在，请核对关联编号。",
+        "cannot depend on itself": "行程不能将自己设为前置事件，请修正关联编号。",
+        "contains a cycle": "行程关联形成循环，请删除错误的前置或衔接关系。",
+        "同行总人数": "成人、儿童和老人合计至少为 1 人，请核对人数。",
+        "受保护行程": "必须保留的行程编号不存在，请核对保护列表。",
+        "366 天": "单次行程跨度超过 366 天，请核对年份或拆分行程。",
+    }
+    for marker, rendered in translations.items():
+        if marker in message:
+            return rendered
+    prefix = f"第 {loc[1] + 1} 项" if len(loc) > 1 and loc[0] == "events" and isinstance(loc[1], int) else ""
+    key = str(loc[-1]) if loc else ""
+    if key == "budget_cny":
+        return "请输入有效的总预算：金额必须大于 0，只填数字，例如 2000。"
+    return f"请检查{prefix}{LABELS.get(key, '行程信息')}：填写值的格式或范围不正确。日期时间请带 +08:00 时区；数量和金额只填数字。"
 
 
 def field_path(parts: tuple[Any, ...]) -> str:
@@ -49,21 +79,41 @@ def completion_fields(payload: dict) -> list[tuple[tuple[Any, ...], str]]:
     except ValidationError as exc:
         for error in exc.errors():
             loc = error["loc"]
-            if loc and error["type"] != "extra_forbidden":
+            if loc and error["type"] != "extra_forbidden" and not isinstance(read_value(payload, loc), (dict, list)):
                 fields.append((loc, LABELS.get(str(loc[-1]), "需修正：" + error["msg"])))
+            if not loc and any(marker in error["msg"] for marker in ("references unknown", "contains a cycle", "cannot depend")):
+                for index, event in enumerate(payload.get("events", [])):
+                    fields.append((("events", index, "depends_on"), LABELS["depends_on"]))
+                    if event.get("transfer_from_event_id"):
+                        fields.append((("events", index, "transfer_from_event_id"), LABELS["transfer_from_event_id"]))
+            if not loc and "受保护行程" in error["msg"]:
+                fields.append((("constraints", "protected_event_ids"), LABELS["protected_event_ids"]))
     for index, event in enumerate(payload.get("events", [])):
         if not isinstance(event, dict):
             continue
         for key in ("start", "end", "cost_cny"):
             if event.get(key) is None:
                 fields.append((("events", index, key), LABELS[key]))
+        # Invalid windows need two editable timestamps, not a whole JSON object.
+        try:
+            if datetime.fromisoformat(str(event.get("end"))) <= datetime.fromisoformat(str(event.get("start"))):
+                for key in ("start", "end"):
+                    fields.append((("events", index, key), LABELS[key]))
+        except (ValueError, TypeError):
+            pass
         for key in ("origin", "destination") if event.get("event_type") == "transport" else ("location",):
             place = event.get(key)
             for prop in ("name", "city"):
                 value = place.get(prop) if isinstance(place, dict) else None
                 if not value or value == "待确认":
                     fields.append((("events", index, key, prop), LABELS[prop]))
-    return list(dict(fields).items())
+    result = []
+    for parts, label in dict(fields).items():
+        if len(parts) > 2 and parts[0] == "events" and isinstance(parts[1], int):
+            title = str(payload["events"][parts[1]].get("title") or "未命名行程")
+            label = f"第 {parts[1] + 1} 项（{title}）：{label}"
+        result.append((parts, label))
+    return result
 
 
 def completion_rows(payload: dict) -> list[list[str]]:
@@ -86,7 +136,7 @@ def completion_rows(payload: dict) -> list[list[str]]:
 
 def cancelled_orders(payload: dict) -> list[str]:
     return [str(event.get("title", "订单")) for event in payload.get("events", [])
-            if isinstance(event, dict) and event.get("metadata", {}).get("booking_status")
+            if isinstance(event, dict) and isinstance(event.get("metadata"), dict) and event["metadata"].get("booking_status")
             in {"refunded", "cancelled", "已退票", "已取消"}]
 
 
@@ -105,13 +155,14 @@ def confirm_draft(payload: dict, rows: list[list[Any]]) -> Trip:
             raise ValueError("参数重复，请保留每个参数一行。")
         seen.add(path)
         value = str(row[2]).strip() if row[2] is not None else ""
-        if not value or value in {"null", "待确认"}:
+        optional_reference = path.endswith(".transfer_from_event_id")
+        if (not value or value in {"null", "待确认"}) and not optional_reference:
             if path == "constraints.budget_cny":
                 raise ValueError("请输入总预算：在表格第一行“总预算”的填写值中输入金额（例如 2000），然后再次点击确认。Plan B 最大新增费用是另一项，不能代替总预算。")
             label = str(row[1]).split("（", 1)[0]
             raise ValueError(f"请输入{label}：在对应行的“填写值”中补充信息，然后再次点击确认。")
         try:
-            parsed = json.loads(value)
+            parsed = None if optional_reference and not value else json.loads(value)
         except (ValueError, TypeError):
             parsed = value
         parts = allowed[path]
@@ -128,19 +179,22 @@ def confirm_draft(payload: dict, rows: list[list[Any]]) -> Trip:
     # Overall dates are derived from actual legs, never from an advertisement.
     events = result.get("events", [])
     if events and all(isinstance(e, dict) and e.get("start") and e.get("end") for e in events):
-        from datetime import datetime
+        for index, event in enumerate(events):
+            for key in ("start", "end"):
+                try:
+                    parsed_time = datetime.fromisoformat(str(event[key]))
+                except (TypeError, ValueError):
+                    raise ValueError(f"请输入有效的第 {index + 1} 项{LABELS[key]}，例如 2026-10-20T20:16:00+08:00。") from None
+                if parsed_time.utcoffset() is None:
+                    raise ValueError(f"第 {index + 1} 项{LABELS[key]}缺少时区，请在时间末尾加上 +08:00。")
+            if datetime.fromisoformat(str(event["end"])) <= datetime.fromisoformat(str(event["start"])):
+                raise ValueError(f"第 {index + 1} 项（{event.get('title', '行程')}）的结束时间必须晚于开始时间；跨日到达请填写次日日期。")
         result["start"] = min((e["start"] for e in events), key=datetime.fromisoformat)
         result["end"] = max((e["end"] for e in events), key=datetime.fromisoformat)
     try:
         trip = Trip.model_validate(result)
     except ValidationError as exc:
-        error = exc.errors()[0]
-        loc = error["loc"]
-        key = str(loc[-1]) if loc else ""
-        if key == "budget_cny":
-            raise ValueError("请输入有效的总预算：金额必须大于 0，只填数字，例如 2000。") from None
-        label = LABELS.get(key, "行程信息")
-        raise ValueError(f"请检查{label}：填写值的格式或范围不正确。日期时间请填写为 2026-10-20T20:16:00+08:00；数量和金额只填数字。") from None
+        raise ValueError(validation_message(exc)) from None
     if trip.constraints.budget_cny is None:
         raise ValueError("请填写总预算后再构建。")
     return trip

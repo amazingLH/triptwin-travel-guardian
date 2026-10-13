@@ -108,15 +108,19 @@ def risk_markdown(
         "weather": "天气",
         "schedule": "日程",
     }
+    severity_labels = {"critical": "严重", "high": "高风险", "medium": "中风险", "low": "低风险"}
     lines = [
         f"### 检出 {analysis.risk_count} 个风险 · 总分 {analysis.total_risk_score}",
-        f"**预算状态：** `{analysis.budget.status}` · 已知预计总额 ¥{analysis.budget.projected_known_total_cny}",
+        f"**预算状态：** { {'within_budget': '已知费用未超预算', 'exceeded': '已知费用超限', 'indeterminate': '未核验（信息不足）'}[analysis.budget.status] } · 已知预计总额 ¥{analysis.budget.projected_known_total_cny}",
+        "检查范围仅为已导入行程及现有证据；未检出风险不代表整趟旅行已核验或绝对安全。",
     ]
+    if analysis.data_quality_warnings:
+        lines.extend(["#### 待核验信息", *("- " + escape(warning) for warning in analysis.data_quality_warnings)])
     for risk in analysis.risks:
         lines.extend(
             [
                 f"#### {labels.get(str(risk.risk_type), str(risk.risk_type))} · {risk.title}",
-                f"`{risk.severity}` / {risk.score}分　{risk.description}",
+                f"{severity_labels[str(risk.severity)]} / {risk.score}分　{escape(risk.description)}",
                 "- 证据：" + "；".join(risk.evidence),
                 "- 建议：" + risk.recommendation,
             ]
@@ -155,9 +159,15 @@ def plan_b_markdown(
         return f"### Plan B 尚未通过本地验证\n\n{reasons}"
     rows = []
     total_extra = validation.total_extra_cost_cny
+    titles = {event.id: event.title for event in trip.events}
     for selection in validation.selections:
+        change_label = (
+            "补齐缺失住宿" if selection.event_id == "additive:date_consistency:missing_accommodation_nights"
+            else "新增行程" if selection.event_id.startswith("additive:")
+            else titles.get(selection.event_id, selection.event_id)
+        )
         rows.append(
-            f"| {escape(selection.event_id)} | "
+            f"| {escape(change_label)} | "
             f"[{escape(selection.name)}]({selection.source_url}) | "
             f"¥{selection.extra_cost_cny} | {len(selection.covered_risk_ids)} |"
         )
@@ -194,8 +204,8 @@ def tool_trace_markdown(
     )
     lines = [
         "### Agent / FlyAI 工具轨迹",
-        f"- 有效 FlyAI 命令证据：**{len(commands)} 条**",
-        "- 所有命令均为 `exit_code=0`、`status=0`",
+        f"- FlyAI 命令证据：**{len(commands)} 条**",
+        f"- 已验证成功：**{sum(command.get('exit_code') == 0 and command.get('result_status') == 0 for command in commands)} 条**；其余未通过验证",
     ]
     if candidate_artifact is None:
         lines.insert(2, "- 合成示例证据：景点查询 3 条；酒店查询 4 条；酒店候选 6 个")
@@ -345,7 +355,9 @@ def chat_context(
             "end": trip.end.isoformat(),
             "travelers": trip.travelers.model_dump(mode="json"),
             "constraints": trip.constraints.model_dump(mode="json"),
+            "events": [event.model_dump(mode="json", exclude={"metadata"}) for event in trip.events],
         },
+        "data_quality_warnings": analysis.data_quality_warnings,
         "risks": [
             {
                 "id": risk.id,

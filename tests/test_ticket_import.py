@@ -117,8 +117,9 @@ def test_pending_draft_cannot_check_risks_or_export():
 
 def test_uploaded_image_parsing_does_not_require_privacy_checkbox(monkeypatch, tmp_path):
     from app import build_twin_guarded
+    from PIL import Image
     path = tmp_path / "ordinary-ticket.png"
-    path.write_bytes(b"test-only image placeholder")
+    Image.new("RGB", (20, 20), "white").save(path)
     monkeypatch.setattr("app.build_twin", lambda paths: ("{}", [], "", "", {"draft_trip": valid_order()}))
     monkeypatch.setattr("app.reserve_global", lambda kind: (True, 1, 5))
     result = build_twin_guarded([str(path)], False, None)

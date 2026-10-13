@@ -54,13 +54,13 @@ def build_replanning_prompt(trip: Trip, analysis: TripAnalysis) -> str:
             "recommendation": risk.recommendation,
         }
         for risk in analysis.risks
-        if risk.affected_event_ids
-        and all(
+        if not risk.affected_event_ids or all(
             event_id in trip.constraints.protected_event_ids
             for event_id in risk.affected_event_ids
         )
     ]
     context = {
+        "trip_graph": trip.model_dump(mode="json"),
         "trip_id": trip.trip_id,
         "trip_window": [trip.start.isoformat(), trip.end.isoformat()],
         "protected_event_ids": protected,
@@ -83,13 +83,17 @@ def build_replanning_prompt(trip: Trip, analysis: TripAnalysis) -> str:
         " 中的节点寻找真实候选；严禁更改 protected_event_ids 中的订单。对于"
         " additive_repairs，必须通过新增节点解决（例如缺少住宿晚数就执行 search-hotel），"
         "并把结果写入 additive_candidates。优先低步行、"
-        "少换乘、室内和预算友好的当前目的地候选，禁止默认使用杭州。至少执行一次 FlyAI 查询。最终仅返回"
+        "少换乘、室内和预算友好的当前目的地候选，禁止默认使用杭州。至少执行一次 FlyAI 查询。"
+        "查询必须把完整业务 JSON 输出到 bash stdout，不重定向到文件、不只报告 EXIT:0；"
+        "name、jumpUrl（或工具 detailUrl）及 event_patch/new_event 的 cost_cny 必须对应同一条工具返回记录；"
+        "价格未知或仅返回价格区间时不要生成可验证候选。最终仅返回"
         "一个 JSON 对象，字段为 status、flyai_commands、candidates、"
         "additive_candidates、notes。每个替换候选除 name、jumpUrl、extra_cost_cny 外，"
         "必须给出可合并回原节点的 event_patch；每个新增候选必须给出完整 new_event，"
         "其字段符合 TripGraph TripEvent。系统会把候选回放后重新运行确定性风险规则，"
         "缺少补丁、原风险未消失或产生新风险都会拒绝。不得声称"
-        "已预订或已支付。\n\nTripGraph context:\n"
+        "已预订或已支付。本次最多执行 3 次 FlyAI 查询和 8 次高德 MCP 调用，"
+        "无有效结果就标明未查询到并结束，不反复安装工具或重试。\n\nTripGraph context:\n"
         + json.dumps(context, ensure_ascii=False, separators=(",", ":"))
     )
 

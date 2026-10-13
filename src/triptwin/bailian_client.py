@@ -181,15 +181,33 @@ class BailianManagedAgentClient:
         *,
         timeout_seconds: float = 60,
         poll_interval_seconds: float = 1,
+        cancel_on_failure: bool = False,
     ) -> AgentRun:
         baseline_ids = {_event_identity(event) for event in self.list_events(session_id)}
-        self.send_message(session_id, text)
-        return self.wait_for_completion(
-            session_id,
-            baseline_ids=baseline_ids,
-            timeout_seconds=timeout_seconds,
-            poll_interval_seconds=poll_interval_seconds,
-        )
+        try:
+            self.send_message(session_id, text)
+            return self.wait_for_completion(
+                session_id,
+                baseline_ids=baseline_ids,
+                timeout_seconds=timeout_seconds,
+                poll_interval_seconds=poll_interval_seconds,
+            )
+        except BailianError as exc:
+            if not cancel_on_failure:
+                raise
+            try:
+                self.interrupt_session(session_id)
+            except BailianError:
+                note = " 自动中断请求未成功，请到百炼控制台确认并停止该会话，避免后台继续运行。"
+            else:
+                note = " 已提交中断请求，请在百炼控制台确认最终状态；已发生的费用不会退回。"
+            raise type(exc)(str(exc) + note) from None
+
+    def interrupt_session(self, session_id: str) -> None:
+        """Best-effort stop for this run only; never approve tool requests."""
+        self._request("POST", f"/sessions/{session_id}/events", json={
+            "input": [{"role": "user", "type": "interrupt"}],
+        })
 
     def wait_for_completion(
         self,
@@ -262,7 +280,9 @@ class BailianManagedAgentClient:
 
     def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
         last_error: Exception | None = None
-        for attempt in range(3):
+        # Retrying a non-idempotent message after a timeout can bill twice.
+        attempts = 3 if method.upper() == "GET" else 1
+        for attempt in range(attempts):
             try:
                 response = self._client.request(method, url, **kwargs)
                 if response.status_code not in TRANSIENT_STATUS_CODES:
@@ -278,10 +298,10 @@ class BailianManagedAgentClient:
                 ) from None
             except httpx.HTTPError as exc:
                 last_error = exc
-            if attempt < 2:
+            if attempt < attempts - 1:
                 time.sleep(0.5 * (2**attempt))
         raise BailianApiError(
-            "连接百炼接口失败，已重试 3 次。请检查网络和资源配置。"
+            f"连接百炼接口失败，已尝试 {attempts} 次。请检查网络和资源配置。"
         ) from last_error
 
     def redact(self, value: Any) -> Any:

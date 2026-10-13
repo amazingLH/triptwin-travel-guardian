@@ -1,6 +1,7 @@
 """Generate and replay minimal schedule changes without inventing external offers."""
 from copy import deepcopy
 from html import escape
+from datetime import datetime
 
 from triptwin.models import Trip
 from triptwin.risk_engine import RiskEngine
@@ -50,7 +51,8 @@ def options_markdown(payload, options):
              "| 方案 | 从计划中移除 | 最后到达时间 | 保留行程票面金额 | 本地风险变化 |",
              "|---|---|---|---|---|"]
     for option in options:
-        lines.append(f"| {escape(option['label'])} | {escape(option['removed_title'])} | {escape(option['arrival'])} | ¥{option['known_cost']} | {option['before_risks']} → {option['after_risks']} |")
+        arrival = datetime.fromisoformat(option["arrival"]).strftime("%m/%d %H:%M")
+        lines.append(f"| {escape(option['label'])} | {escape(option['removed_title'])} | {arrival} | ¥{option['known_cost']} | {option['before_risks']} → {option['after_risks']} |")
     lines += ["", "- 两个方案均保留受保护行程；结构、引用、日期、预算及衔接规则已重新检查。",
               "- 未新增购票费用；移除订单的实际退款和手续费未知，上表不是退款后实际支出。",
               "- 这些是现有行程的局部调整方案，没有查询新车次余票、天气或实时交通。",

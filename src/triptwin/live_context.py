@@ -132,6 +132,8 @@ def parse_amap_events(
     poi_results: list[dict[str, Any]] = []
 
     for event, data in outputs:
+        if event.get("is_error") is True:
+            continue
         name = str(data.get("name") or "")
         if name:
             tool_names.append(name)
@@ -201,6 +203,7 @@ def apply_amap_evidence(
 
     route = inspection.route
     weather = inspection.weather
+    by_id = {item.get("id"): item for item in events if isinstance(item, dict)}
     for event in events:
         if not isinstance(event, dict):
             continue
@@ -213,10 +216,13 @@ def apply_amap_evidence(
         location_name = (
             str(location.get("name") or "") if isinstance(location, dict) else ""
         )
+        previous = by_id.get(event.get("transfer_from_event_id"), {})
+        previous_place = previous.get("destination") or previous.get("location") or {}
         if (
             route
             and route.status is VerificationStatus.VERIFIED
             and route.destination_name in location_name
+            and route.origin_name == previous_place.get("name")
             and event.get("transfer_from_event_id")
         ):
             event["travel_minutes_from_previous"] = math.ceil(
@@ -226,8 +232,10 @@ def apply_amap_evidence(
 
         if event.get("weather_sensitive") and weather:
             event_date = str(event.get("start") or "")[:10]
+            event_city = str((location or {}).get("city") or "").removesuffix("市")
+            city_matches = bool(event_city) and event_city == weather.city.removesuffix("市")
             forecast = next(
-                (item for item in weather.forecasts if item.date == event_date), None
+                (item for item in weather.forecasts if city_matches and item.date == event_date), None
             )
             metadata["amap_weather_evidence"] = {
                 "source_tool": weather.source_tool,
@@ -237,6 +245,7 @@ def apply_amap_evidence(
                 "forecast": forecast.model_dump(mode="json") if forecast else None,
                 "warning": None
                 if forecast
+                else "高德返回的城市与活动地点不一致，天气未核验。" if not city_matches
                 else "高德返回的预报日期未覆盖该活动日期，禁止估算天气。",
             }
     return result
@@ -270,6 +279,8 @@ def _route_evidence(
     warning = None
     if precision in {"区县", "市", "省"}:
         warning = "终点仅匹配到行政区级坐标，路线可作风险参考，但需再次确认精确 POI。"
+    if precision == "未知" or str((origin_geo or {}).get("level") or "未知") in {"区县", "市", "省", "未知"}:
+        warning = "起点或终点尚未匹配到精确地点，路线未通过精度核验。"
     return RouteEvidence(
         fetched_at=_parse_datetime(event.get("created_at")) or datetime.now(UTC),
         origin_name=origin_name,
@@ -330,6 +341,8 @@ def _decode_mcp_output(value: Any) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     content = envelope.get("content") if isinstance(envelope, dict) else None
+    if isinstance(envelope, dict) and envelope.get("isError") is True:
+        return None
     if not isinstance(content, list):
         return None
     for block in content:
@@ -369,7 +382,7 @@ def _match_geo(
             arguments = {}
         if arguments.get("address") == name:
             return geo
-    return items[index][1] if len(items) > index else None
+    return None
 
 
 def _precise_poi(items, name, route_coordinates):

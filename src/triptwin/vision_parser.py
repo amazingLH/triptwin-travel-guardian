@@ -6,10 +6,12 @@ import base64
 import copy
 import json
 import io
-import mimetypes
 import re
+import warnings
+from datetime import datetime
+from uuid import uuid4
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -17,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from PIL import Image, ImageOps
 
 from triptwin.config import ModelSettings, Settings
-from triptwin.models import Trip
+from triptwin.models import Trip, TripEvent, TripConstraints, TravelerProfile, Location
 
 
 class VisionExtraction(BaseModel):
@@ -26,7 +28,7 @@ class VisionExtraction(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     trip: Trip | dict[str, Any]
-    field_confidence: dict[str, float] = Field(default_factory=dict)
+    field_confidence: dict[str, Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]] = Field(default_factory=dict)
     low_confidence_fields: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
 
@@ -42,6 +44,10 @@ class VisionExtraction(BaseModel):
             or not all(isinstance(event, dict) for event in self.trip["events"])
         ):
             raise ValueError("未识别到可补全的行程事件，请提供订单主要内容。")
+        self.low_confidence_fields = list(dict.fromkeys([
+            *self.low_confidence_fields,
+            *(key for key, score in self.field_confidence.items() if score < 0.8),
+        ]))
         return self
 
 
@@ -69,6 +75,7 @@ def extract_trip_from_images(
     """Merge up to five itinerary images into one validated TripGraph."""
 
     paths = [Path(value) for value in image_paths]
+    validate_image_files(paths)
     if not paths or len(paths) > 5:
         raise ValueError("请上传 1–5 张行程图片。")
     missing = [str(path) for path in paths if not path.is_file()]
@@ -174,6 +181,26 @@ def extract_trip_from_images(
     return extraction, metadata
 
 
+def validate_image_files(paths: list[Path]) -> None:
+    """Reject unreadable/oversized uploads locally, before reserving paid calls."""
+    if not 1 <= len(paths) <= 5:
+        raise ValueError("请上传 1–5 张行程图片。")
+    if any(not path.is_file() for path in paths):
+        raise ValueError("部分图片已过期或不存在，请重新上传。")
+    if sum(path.stat().st_size for path in paths) > 20 * 1024 * 1024:
+        raise ValueError("多张图片合计超过 20 MB，请压缩后重试。")
+    for path in paths:
+        if path.stat().st_size > 12 * 1024 * 1024:
+            raise ValueError(f"图片 {path.name} 超过 12 MB，请压缩后重试。")
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", Image.DecompressionBombWarning)
+                with Image.open(path) as opened:
+                    opened.verify()
+        except (OSError, ValueError, Image.DecompressionBombError, Image.DecompressionBombWarning):
+            raise ValueError(f"图片 {path.name} 无法读取或像素过大，请重新保存为 JPG/PNG 后上传。") from None
+
+
 def _safe_data_url(path: Path) -> str:
     """Normalize orientation and bound pixels/bytes before sending upstream."""
 
@@ -188,11 +215,8 @@ def _safe_data_url(path: Path) -> str:
             image.save(buffer, format="JPEG", quality=88, optimize=True)
             data = buffer.getvalue()
             mime_type = "image/jpeg"
-    except (OSError, ValueError) as exc:
-        mime_type = mimetypes.guess_type(path.name)[0] or "image/png"
-        if not mime_type.startswith("image/"):
-            raise ValueError(f"{path.name} 不是支持的图片文件。") from exc
-        data = path.read_bytes()
+    except (OSError, ValueError, Image.DecompressionBombError) as exc:
+        raise ValueError(f"图片 {path.name} 无法读取或像素过大，请重新保存为 JPG/PNG 后上传。") from exc
     return f"data:{mime_type};base64," + base64.b64encode(data).decode("ascii")
 
 
@@ -203,6 +227,16 @@ def _normalize_extraction(payload: dict[str, Any]) -> dict[str, Any]:
     trip = normalized.get("trip")
     if not isinstance(trip, dict):
         return normalized
+    if not trip.get("trip_id"):
+        trip["trip_id"] = "trip-" + uuid4().hex[:12]
+    if not trip.get("version"):
+        trip["version"] = "1.0"
+    if not trip.get("title"):
+        trip["title"] = "我的旅行行程"
+    if not isinstance(trip.get("travelers"), (dict, list)):
+        trip["travelers"] = {}
+    if not isinstance(trip.get("constraints"), dict):
+        trip["constraints"] = {}
 
     travelers = trip.get("travelers")
     if isinstance(travelers, list):
@@ -216,7 +250,10 @@ def _normalize_extraction(payload: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(traveler, dict):
                 continue
             traveler_type = str(traveler.get("type", "")).lower()
-            count = int(traveler.get("count", 0))
+            try:
+                count = max(0, int(traveler.get("count") or 0))
+            except (TypeError, ValueError):
+                count = 0
             if "senior" in traveler_type or "老人" in traveler_type:
                 profile["seniors"] += count
             elif "child" in traveler_type or "儿童" in traveler_type:
@@ -254,9 +291,11 @@ def _normalize_extraction(payload: dict[str, Any]) -> dict[str, Any]:
     events = trip.get("events")
     if isinstance(events, list):
         previous_event_id: str | None = None
-        for event in events:
+        for index, event in enumerate(events):
             if not isinstance(event, dict):
                 continue
+            if not event.get("id"):
+                event["id"] = f"event-{index + 1}"
             aliases = {
                 "walk_minutes": "walking_minutes",
                 "transit_time_minutes": "travel_minutes_from_previous",
@@ -314,6 +353,9 @@ def _normalize_extraction(payload: dict[str, Any]) -> dict[str, Any]:
             metadata = event.get("metadata")
             if not isinstance(metadata, dict):
                 metadata = {}
+            # A model extraction is not an external-tool attestation. Keep only
+            # order facts; strip arbitrary identity keys and invented MCP evidence.
+            metadata = {key: metadata[key] for key in ("booking_status", "nights") if key in metadata}
             if "nights" in event:
                 metadata["nights"] = event.pop("nights")
             if event.pop("is_protected", False):
@@ -327,6 +369,26 @@ def _normalize_extraction(payload: dict[str, Any]) -> dict[str, Any]:
                     ]
             if isinstance(event.get("id"), str):
                 previous_event_id = event["id"]
+            for key in list(event):
+                if key not in TripEvent.model_fields:
+                    del event[key]
+            for key in ("origin", "destination", "location"):
+                if isinstance(event.get(key), dict):
+                    event[key] = {name: value for name, value in event[key].items() if name in Location.model_fields}
+        # These are derived identifiers/windows, not invented user facts.
+        try:
+            starts = [datetime.fromisoformat(str(event["start"])) for event in events]
+            ends = [datetime.fromisoformat(str(event["end"])) for event in events]
+            if starts and all(value.utcoffset() is not None for value in [*starts, *ends]):
+                trip["start"] = min(starts).isoformat()
+                trip["end"] = max(ends).isoformat()
+        except (KeyError, ValueError, TypeError):
+            pass
+    for key, model_type in (("travelers", TravelerProfile), ("constraints", TripConstraints)):
+        if isinstance(trip.get(key), dict):
+            trip[key] = {name: value for name, value in trip[key].items() if name in model_type.model_fields}
+    trip["risks"] = []
+    normalized["trip"] = {name: value for name, value in trip.items() if name in Trip.model_fields}
     return normalized
 
 
@@ -341,7 +403,7 @@ def _infer_city(text: str) -> str | None:
         return match.group(1)
     common = (
         "杭州", "苏州", "南京", "广州", "深圳", "成都", "西安", "武汉",
-        "长沙", "厦门", "青岛", "大连", "昆明", "三亚", "桂林", "哈尔滨",
+        "长沙", "厦门", "青岛", "大连", "昆明", "三亚", "桂林", "哈尔滨", "沈阳", "秦皇岛", "葫芦岛",
     )
     return next((name for name in common if name in text), None)
 

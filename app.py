@@ -12,6 +12,8 @@ from html import escape
 from urllib.parse import quote
 from pathlib import Path
 from typing import Any
+from datetime import UTC, datetime
+from dotenv import dotenv_values
 
 # ModelScope starts this file directly with `python app.py`.  Make the src-layout
 # package importable even before an editable install has completed.
@@ -46,10 +48,10 @@ from triptwin.session_history import (
 )
 from triptwin.runtime_agent import run_live_trip
 from triptwin.exporter import export_trip_files
-from triptwin.input_completion import completion_rows, cancelled_orders, confirm_draft
+from triptwin.input_completion import completion_rows, cancelled_orders, confirm_draft, validation_message
 from triptwin.functional_examples import example_kind, example_paths, example_trip, field_description
 from triptwin.local_planner import schedule_options, options_markdown
-from triptwin.vision_parser import extract_trip_from_images
+from triptwin.vision_parser import extract_trip_from_images, validate_image_files
 from triptwin.usage_guard import (
     browser_can_consume,
     browser_limits,
@@ -84,6 +86,7 @@ UPLOADED_INSPECTION_PENDING = (
     "### ⏱️ 当前上传行程 · 主动巡检\n\n"
     "尚未执行实时核验。"
 )
+MODEL_UNAVAILABLE_REPLY = "当前模型服务暂时不可用，请稍后重试；TripGraph 和已生成的 Plan B 不受影响。"
 
 APP_CSS = """
 .hero {background:linear-gradient(120deg,#f4f7ff,#dbeafe);padding:24px;border:1px solid #c7d7f4;border-radius:18px;color:#17233c}
@@ -113,6 +116,7 @@ APP_CSS = """
 .step-heading h2 {font-size:19px;margin:0;color:#17233c}.step-heading p {margin:3px 0 0;color:#667085;font-size:13px}
 .step-nav {display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}.step-nav a {padding:8px 12px;background:#eef2ff;border-radius:20px;text-decoration:none;color:#5145cd;font-size:13px}
 .step-card {scroll-margin-top:20px}
+#step-plan table td:nth-last-child(-n+2) {white-space:nowrap}
 .session-bar {align-items:center!important}.session-bar button {min-height:38px!important}
 @media(max-width:640px) {.step-card {padding:14px!important}.hero {padding:18px}.timeline-item {grid-template-columns:100px 1fr;gap:10px}}
 #tripgraph-editor .codemirror-wrapper {height:360px!important;max-height:360px!important;overflow:hidden!important}
@@ -142,8 +146,20 @@ footer {color:#b7cfe4!important}footer a,footer button {color:#b7cfe4!important}
 @media(max-width:640px) {body::before {animation:none;will-change:auto}.hero {padding:20px}}
 """
 
-BROWSER_STATE_SECRET = os.getenv("TRIPTWIN_BROWSER_STATE_SECRET") or secrets.token_urlsafe(32)
-RATE_LIMIT_SALT = os.getenv("TRIPTWIN_RATE_LIMIT_SALT") or secrets.token_urlsafe(32)
+_LOCAL_ENV = dotenv_values(PROJECT_ROOT / ".env")
+BROWSER_STATE_SECRET = os.getenv("TRIPTWIN_BROWSER_STATE_SECRET") or _LOCAL_ENV.get("TRIPTWIN_BROWSER_STATE_SECRET") or secrets.token_urlsafe(32)
+RATE_LIMIT_SALT = os.getenv("TRIPTWIN_RATE_LIMIT_SALT") or _LOCAL_ENV.get("TRIPTWIN_RATE_LIMIT_SALT") or secrets.token_urlsafe(32)
+
+
+def live_evidence_is_recent(state):
+    try:
+        captured = datetime.fromisoformat(str(state.get("live_generated_at") or ""))
+        if captured.utcoffset() is None:
+            return False
+        age = (datetime.now(UTC) - captured).total_seconds()
+        return 0 <= age <= 3600
+    except (ValueError, TypeError):
+        return False
 
 
 def load_example() -> tuple[list[str], str, dict[str, str]]:
@@ -259,6 +275,16 @@ def reset_import_view() -> tuple[Any, ...]:
     )
 
 
+def reset_downstream_view():
+    """Invalidate results tied to an earlier graph after rebuilding/editing."""
+    return (
+        "### 风险卡片\n\n行程已更新，请重新检查风险。",
+        "### 原方案 / Plan B\n\n行程已更新，请重新生成方案。",
+        "### Agent 工具执行轨迹摘要\n\n等待当前行程核验。",
+        [], "", None,
+    )
+
+
 def run_manual_inspection_for_state(
     state: dict[str, Any] | None,
 ) -> tuple[str, str]:
@@ -289,7 +315,7 @@ def run_manual_inspection_for_state(
                     "",
                     f"- 最近实时核验：**{state.get('live_generated_at', '未知')}**",
                     f"- 当前确定性结果：**{analysis.risk_count} 个风险 / {analysis.total_risk_score} 分**",
-                    "- 外部事实来自当前会话的高德 MCP；候选来自当前会话的 FlyAI 查询。",
+                    "- 外部事实来自当前会话的高德 MCP；天气只核验工具实际返回的日期。",
                 ]
             ),
         )
@@ -399,6 +425,10 @@ def build_twin_guarded(
     paths = _image_paths(image_paths)
     if not paths:
         raise gr.Error("请先上传图片，或展开“行程功能示例”并选择一个示例。")
+    try:
+        validate_image_files(paths)
+    except ValueError as exc:
+        raise gr.Error(str(exc) + " 本次未调用模型，不消耗解析次数。") from None
     store, _ = ensure_active_session(browser_store)
     client_key = _anonymous_client_key(request)
     client_reserved = False
@@ -408,7 +438,7 @@ def build_twin_guarded(
         if not allowed:
             raise gr.Error(
                 f"为保护有限 Token，每个浏览器每天最多解析 "
-                f"{browser_limits()['images']} 张自行上传的图片；请明日再试。"
+                f"{browser_limits()['images']} 次自行上传图片解析；请明日再试。"
             )
         if client_key:
             client_allowed, _, client_limit = reserve_client(client_key, "images")
@@ -427,10 +457,7 @@ def build_twin_guarded(
     try:
         result = build_twin(paths)
     except Exception as exc:
-        if global_reserved:
-            release_reservation("global", "all", "images")
-        if client_reserved:
-            release_reservation("client", client_key, "images")
+        quota_note = " 已发起云端解析请求，本次计入解析次数；请勿连续重试，先确认配置或图片内容。" if global_reserved else ""
         if isinstance(exc, gr.Error):
             raise
         import httpx
@@ -438,15 +465,15 @@ def build_twin_guarded(
             code = exc.response.status_code
             message = (
                 "图片解析服务拒绝了请求。请检查创空间的视觉模型名称、调用权限及账户余额/额度。"
-                f"（HTTP {code}）这不是图片格式错误；本次解析额度已退还。"
+                f"（HTTP {code}）"
             )
         elif isinstance(exc, httpx.TimeoutException):
-            message = "图片解析超时，请稍后重试；本次解析额度已退还。"
+            message = "图片解析超时，请稍后再试。"
         elif isinstance(exc, ValueError):
-            message = "图片解析未完成：" + str(exc)[:400] + " 本次解析额度已退还。"
+            message = "图片解析未完成：" + str(exc)[:400]
         else:
-            message = "图片解析服务异常，请查看创空间运行日志；本次解析额度已退还。"
-        raise gr.Error(message) from None
+            message = "图片解析服务异常，请查看创空间运行日志。"
+        raise gr.Error(message + quota_note) from None
     if not _is_functional_example(paths):
         store["usage"] = consume_browser(usage, "images")
     return *result, store
@@ -486,6 +513,7 @@ def confirm_import(rows, state):
     current.pop("completion_rows", None)
     current.pop("completion_error", None)
     current["stage"] = "ready"
+    current["recognition_confirmed"] = True
     current["low_confidence_fields"] = []
     return (
         "✅ 信息已补全并确认，旅行数字孪生已构建；可以继续第 3 步检查风险。",
@@ -530,16 +558,25 @@ def apply_tripgraph_edits(
         from triptwin.models import Trip
 
         trip = Trip.model_validate(payload)
+    except json.JSONDecodeError as exc:
+        raise gr.Error(f"JSON 格式不正确：请检查第 {exc.lineno} 行附近的引号、逗号和括号。原行程未修改。") from None
     except Exception as exc:
-        raise gr.Error(f"TripGraph 修改未通过校验：{exc}") from None
+        from pydantic import ValidationError
+        message = validation_message(exc) if isinstance(exc, ValidationError) else "请输入完整的行程 JSON 对象。"
+        raise gr.Error(message + " 原行程未修改。") from None
     updated = dict(state or {})
     updated["trip"] = trip.model_dump(mode="json")
-    needs_confirmation = updated.get("trip_source") != "synthetic_example"
+    needs_confirmation = True
     if needs_confirmation:
         updated["draft_trip"] = updated.pop("trip")
     updated["trip_source"] = "user_corrected"
-    updated.pop("live_candidate_artifact", None)
-    updated.pop("live_inspection", None)
+    for key in ("live_candidate_artifact", "live_inspection", "live_generated_at", "managed_session", "local_plan_options", "local_analysis_completed", "completion_rows", "completion_error", "recognition_confirmed"):
+        updated.pop(key, None)
+    payload_to_clean = updated.get("trip") or updated.get("draft_trip")
+    for event in payload_to_clean["events"]:
+        metadata = event.get("metadata") or {}
+        metadata.pop("amap_route_evidence", None)
+        metadata.pop("amap_weather_evidence", None)
     return (
         trip.model_dump_json(indent=2),
         "" if needs_confirmation else timeline_html(updated["trip"]),
@@ -549,10 +586,10 @@ def apply_tripgraph_edits(
     )
 
 
-def export_current_trip(state: dict[str, Any] | None) -> list[str]:
+def export_current_trip(state: dict[str, Any] | None, *, cache_root=None) -> list[str]:
     if not isinstance(state, dict) or not isinstance(state.get("trip"), dict):
         raise gr.Error("请先构建旅行数字孪生。")
-    return export_trip_files(state["trip"])
+    return export_trip_files(state["trip"], directory_root=cache_root)
 
 
 def render_state_trip(state: dict[str, Any] | None) -> tuple[str, str]:
@@ -627,7 +664,7 @@ def generate_plan_b(
             inspection_panel,
         )
 
-    if isinstance(state.get("live_candidate_artifact"), dict) and isinstance(
+    if live_evidence_is_recent(state) and isinstance(state.get("live_candidate_artifact"), dict) and isinstance(
         state.get("live_inspection"), dict
     ):
         from triptwin.live_context import AmapInspection
@@ -755,6 +792,8 @@ def refresh_confidence(state):
     values = (state or {}).get("field_confidence") or {}
     rows = [[key, round(float(value), 3), field_description(key, state.get("trip"))] for key, value in sorted(values.items())]
     low = (state or {}).get("low_confidence_fields") or []
+    if (state or {}).get("recognition_confirmed"):
+        return rows, "✅ 已人工确认识别结果。表格保留原始模型置信度，人工确认不会将低分改成 1。"
     return rows, "已确认仍存在的识别限制：" + "、".join(low) if low else "✅ 当前保留行程没有低于 0.8 的已标注字段。"
 
 
@@ -764,6 +803,10 @@ def generate_plan_b_guarded(
     browser_store: dict[str, Any] | None,
     request: gr.Request | None = None,
 ) -> tuple[str, str, dict[str, Any], str, str, dict[str, Any]]:
+    if not isinstance(state, dict) or not isinstance(state.get("trip"), dict):
+        raise gr.Error("请先解析截图、补全必要信息并构建旅行数字孪生。")
+    if state.get("low_confidence_fields") and not confirmed:
+        raise gr.Error("请先核对并确认低置信字段。")
     store, _ = ensure_active_session(browser_store)
     if state.get("trip_source") in {"synthetic_example", "ticket_example"}:
         result = generate_plan_b(state, confirmed)
@@ -772,7 +815,7 @@ def generate_plan_b_guarded(
         return *generate_plan_b(state, confirmed), store
     if isinstance(state.get("trip"), dict) and schedule_options(state["trip"]):
         return *generate_plan_b(state, confirmed), store
-    if isinstance(state.get("live_candidate_artifact"), dict):
+    if live_evidence_is_recent(state) and isinstance(state.get("live_candidate_artifact"), dict):
         result = generate_plan_b(state, confirmed)
         return *result, store
 
@@ -795,11 +838,10 @@ def generate_plan_b_guarded(
         raise gr.Error(f"今日全站实时工具核验已达到 {global_limit} 次。")
     try:
         result = generate_plan_b(state, confirmed)
-    except Exception:
-        release_reservation("global", "all", "agent_runs")
-        if client_reserved:
-            release_reservation("client", client_key, "agent_runs")
-        raise
+    except Exception as exc:
+        # A timed-out/invalid cloud result may still incur upstream charges.
+        # Retain server-side reservations so retries cannot bypass the cost cap.
+        raise gr.Error(str(exc) + " 本次已发起云端请求，计入核验次数，避免反复重试造成额外费用。") from None
     store["usage"] = consume_browser(usage, "agent_runs")
     return *result, store
 
@@ -814,10 +856,47 @@ def run_live_inspection_guarded(
         raise gr.Error("请先构建旅行数字孪生。")
     if state.get("low_confidence_fields") and not confirmed:
         raise gr.Error("请先核对并确认低置信字段，再执行外部工具核验。")
-    _, _, updated, amap_panel, inspection_panel, store = generate_plan_b_guarded(
-        state, confirmed, browser_store, request
-    )
+    store, _ = ensure_active_session(browser_store)
+    if state.get("trip_source") in {"synthetic_example", "ticket_example"}:
+        return *run_manual_inspection_for_state(state), state, store
+    if live_evidence_is_recent(state) and isinstance(state.get("live_inspection"), dict):
+        return *run_manual_inspection_for_state(state), state, store
+    allowed, usage = browser_can_consume(store.get("usage"), "agent_runs")
+    if not allowed:
+        raise gr.Error("今日实时核验次数已用完，仍可检查本地风险和查看已有结果。")
+    client_key = _anonymous_client_key(request)
+    if client_key and not reserve_client(client_key, "agent_runs")[0]:
+        raise gr.Error("当前匿名访客今日实时核验次数已用完。")
+    global_allowed, _, global_limit = reserve_global("agent_runs")
+    if not global_allowed:
+        if client_key:
+            release_reservation("client", client_key, "agent_runs")
+        raise gr.Error(f"今日全站实时核验已达到 {global_limit} 次。")
+    try:
+        analysis = analyze_trip(state["trip"], include_cached_amap=False)[1]
+        needs_candidates = analysis.risk_count > 0 and not schedule_options(state["trip"])
+        result = run_live_trip(state["trip"], inspect_only=not needs_candidates)
+    except Exception as exc:
+        raise gr.Error("实时核验未完成：" + str(exc)[:500] + " 本次已发起云端请求，计入核验次数；本地风险检查仍可使用。") from None
+    updated = dict(state)
+    updated.update(trip=result.trip, live_inspection=result.inspection.model_dump(mode="json"), live_generated_at=result.generated_at)
+    if needs_candidates:
+        updated["live_candidate_artifact"] = result.candidate_artifact
+    else:
+        updated.pop("live_candidate_artifact", None)
+    updated.pop("local_plan_options", None)
+    store["usage"] = consume_browser(usage, "agent_runs")
+    amap_panel, inspection_panel = run_manual_inspection_for_state(updated)
     return amap_panel, inspection_panel, updated, store
+
+
+def current_tool_trace(state):
+    if state.get("trip_source") == "synthetic_example":
+        return tool_trace_markdown()
+    if isinstance(state.get("live_inspection"), dict):
+        from triptwin.live_context import AmapInspection
+        return tool_trace_markdown(state.get("live_candidate_artifact") or {"flyai_commands": []}, AmapInspection.model_validate(state["live_inspection"]))
+    return "### 本地风险检查\n\n本次未调用外部工具，实时信息尚未核验。"
 
 
 def answer_question(
@@ -828,6 +907,8 @@ def answer_question(
     text = (question or "").strip()
     if not text:
         raise gr.Error("请先输入问题。")
+    if len(text) > 500:
+        raise gr.Error("问题请控制在 500 字以内，便于简洁回答并控制费用。")
     trip_payload = (
         state["trip"]
         if state and isinstance(state.get("trip"), dict)
@@ -847,7 +928,7 @@ def answer_question(
             ),
         )
     except Exception:
-        answer = "当前模型服务暂时不可用，请稍后重试；TripGraph 和已生成的 Plan B 不受影响。"
+        answer = MODEL_UNAVAILABLE_REPLY
     conversation.append({"role": "assistant", "content": answer})
     return "", conversation
 
@@ -864,6 +945,8 @@ def answer_question_guarded(
     text = (question or "").strip()
     if not text:
         raise gr.Error("请先输入问题。")
+    if len(text) > 500:
+        raise gr.Error("问题请控制在 500 字以内，本次未调用模型。")
     store, _ = ensure_active_session(browser_store)
     if not _has_question_context(state):
         conversation = list(history or [])
@@ -971,7 +1054,7 @@ def answer_question_guarded(
     _, conversation = answer_question(text, history, state)
     store["usage"] = consume_browser(usage, "questions")
     answer = conversation[-1].get("content") if conversation else None
-    if isinstance(answer, str) and answer.strip():
+    if isinstance(answer, str) and answer.strip() and answer != MODEL_UNAVAILABLE_REPLY:
         cache = dict(store.get("answer_cache") or {})
         cache[cache_key] = answer
         store["answer_cache"] = dict(list(cache.items())[-50:])
@@ -1033,6 +1116,7 @@ def _is_free_synthetic_question(
         "第二晚推荐住哪里",
         "是否会自动预定",
         "候选数据来自哪里",
+        "是否会自动预订",
     }
 
 
@@ -1041,7 +1125,7 @@ def _has_question_context(state: dict[str, Any] | None) -> bool:
         return False
     if isinstance(state.get("trip"), dict):
         return True
-    return state.get("trip_source") == "synthetic_example"
+    return False
 
 
 def _normalize_showcase_question(question: str) -> str:
@@ -1150,6 +1234,8 @@ def _session_view(session: dict[str, Any]) -> tuple[Any, ...]:
         if low_fields
         else "尚未解析。"
     )
+    if trip_state.get("recognition_confirmed") and isinstance(trip, dict):
+        low_text = "✅ 已人工确认识别结果。表格保留原始模型置信度，人工确认不会将低分改成 1。"
     timeline = timeline_html(trip) if isinstance(trip, dict) else ""
     safe_amap, safe_inspection = safe_context_panels(
         trip_state,
@@ -1284,7 +1370,7 @@ def clear_all_history_sessions(browser_store: Any) -> tuple[Any, ...]:
 
 
 def create_app() -> gr.Blocks:
-    with gr.Blocks(title="TripTwin 旅行数字孪生守护者") as demo:
+    with gr.Blocks(title="TripTwin 旅行数字孪生守护者", delete_cache=(3600, 3600)) as demo:
         state = gr.State({})
         browser_store = gr.BrowserState(
             default_value={"version": 1, "active_id": None, "sessions": []},
@@ -1341,6 +1427,7 @@ def create_app() -> gr.Blocks:
                 label="隐私提醒状态", visible=False
             )
             gr.Markdown("支持 12306 车票、机票、酒店订单或完整行程截图，**无需固定模板**。截图缺少的必要信息会在第 2 步提示手动补充；也可清空后上传更详细的行程截图。请裁掉广告并遮挡姓名、订单号、流水号等信息。")
+            gr.Markdown("自行上传的截图会发送至百炼解析，系统不会自动给原图打码。服务器临时上传与导出文件约 1–2 小时后清理；过期后请重新上传或导出。")
         with gr.Column(elem_id="step-build", elem_classes=["step-card"]):
             gr.HTML("<div class='step-heading'><span class='step-number'>2</span><div><h2>解析、补全与构建</h2><p>先解析截图，再补全并确认必要信息，构建完成后继续第 3 步。合成示例的信息已完整。</p></div></div>")
             build_button = gr.Button("② 解析行程截图", variant="primary")
@@ -1356,6 +1443,7 @@ def create_app() -> gr.Blocks:
                 confirm_import_button = gr.Button("确认信息并构建旅行数字孪生", variant="primary")
             timeline = gr.HTML(label="TripGraph 时间线")
             with gr.Accordion("校对与修改 · 结构化行程", open=False, visible=False) as editor_section:
+                gr.Markdown("高级校对：草稿不代表已构建行程；通常只需补全上方表格。若识别的车次、日期或关联编号有误，可在此修改完整 JSON 后校验，仍需确认必要参数。")
                 trip_json = gr.Code(
                     language="json",
                     label="结构化 TripGraph（可校对修改）",
@@ -1383,7 +1471,7 @@ def create_app() -> gr.Blocks:
                 recheck_button = gr.Button("重新检查")
             risks = gr.Markdown("### 风险卡片\n\n等待检查。")
         with gr.Column(elem_id="step-plan", elem_classes=["step-card"]):
-            gr.HTML("<div class='step-heading'><span class='step-number'>4</span><div><h2>生成 Plan B</h2><p>基于当前行程生成替代方案。自行上传的行程会执行实时工具核验。</p></div></div>")
+            gr.HTML("<div class='step-heading'><span class='step-number'>4</span><div><h2>生成 Plan B</h2><p>先尝试本地冲突调整；需要新候选时才执行实时工具核验。没有风险时无需替代方案。</p></div></div>")
             plan_button = gr.Button("④ 生成 Plan B", variant="primary")
             plan_b = gr.Markdown("### 原方案 / Plan B\n\n等待生成。")
             with gr.Column(visible=False) as local_options_section:
@@ -1391,6 +1479,7 @@ def create_app() -> gr.Blocks:
                 apply_local_button = gr.Button("应用到当前行程 · 不执行实际退改", variant="primary")
             with gr.Accordion("查看工具证据与实时巡检", open=False):
                 inspect_button = gr.Button("查看 / 执行实时巡检", variant="secondary")
+                gr.Markdown("用户行程首次执行会调用高德并计入实时核验次数；1 小时内复用已有核验，过期后再次执行仍受每日额度限制。单段交通或同站衔接不查询跨城公交。功能示例仅查看已有演示证据或本地复检；本页面不会自动后台巡检。")
                 amap_status = gr.Markdown(EMPTY_AMAP_STATUS)
                 inspection_status = gr.Markdown(EMPTY_INSPECTION_STATUS)
                 trace = gr.Markdown("### Agent 工具执行轨迹摘要\n\n等待生成。")
@@ -1473,6 +1562,7 @@ def create_app() -> gr.Blocks:
             trip_json, confidence, low_confidence, timeline, confirmed,
             risks, plan_b, trace, question, chatbot, export_files,
         ]
+        downstream_outputs = [risks, plan_b, trace, chatbot, question, export_files]
         load_event = single_example_button.click(
             reset_import_view, outputs=import_outputs, api_name=False,
         ).then(load_example, outputs=[image, status, state], api_name="load_example")
@@ -1481,7 +1571,12 @@ def create_app() -> gr.Blocks:
             outputs=import_outputs,
             api_name=False,
         ).then(persist_current_session, inputs=session_inputs, outputs=session_outputs)
-        image.clear(reset_import_view, outputs=import_outputs, api_name=False)
+        image.clear(reset_import_view, outputs=import_outputs, api_name=False).then(
+            persist_current_session, inputs=session_inputs, outputs=session_outputs,
+        )
+        image.delete(reset_import_view, outputs=import_outputs, api_name=False).then(
+            persist_current_session, inputs=session_inputs, outputs=session_outputs,
+        )
         load_context_event = load_event.then(
             context_panels_for_state,
             inputs=state,
@@ -1531,12 +1626,12 @@ def create_app() -> gr.Blocks:
             ) + str(current.get("parse_summary", "")),
             inputs=[state],
             outputs=status,
-        )
+        ).then(lambda: (*reset_downstream_view(), False), outputs=[*downstream_outputs, confirmed], api_name=False)
         build_event.then(completion_panel, inputs=state, outputs=[completion_section, completion_table, completion_message])
         confirm_import_button.click(
             confirm_import, inputs=[completion_table, state],
             outputs=[status, timeline, state, trip_json, confirmed], api_name=False,
-        ).then(completion_panel, inputs=state, outputs=[completion_section, completion_table, completion_message]).then(
+        ).then(reset_downstream_view, outputs=downstream_outputs, api_name=False).then(refresh_confidence, inputs=state, outputs=[confidence, low_confidence]).then(completion_panel, inputs=state, outputs=[completion_section, completion_table, completion_message]).then(
             context_panels_for_state, inputs=state, outputs=[amap_status, inspection_status],
         ).then(persist_current_session, inputs=session_inputs, outputs=session_outputs)
         build_context_event = build_event.then(
@@ -1554,7 +1649,7 @@ def create_app() -> gr.Blocks:
             inputs=[trip_json, state],
             outputs=[trip_json, timeline, state, status, confirmed],
             api_name=False,
-        )
+        ).then(reset_downstream_view, outputs=downstream_outputs, api_name=False)
         edit_event.then(
             context_panels_for_state,
             inputs=state,
@@ -1565,8 +1660,10 @@ def create_app() -> gr.Blocks:
             outputs=session_outputs,
         )
         edit_event.then(completion_panel, inputs=state, outputs=[completion_section, completion_table, completion_message])
+        def export_callback(current):
+            return export_current_trip(current, cache_root=export_files.GRADIO_CACHE)
         export_button.click(
-            export_current_trip,
+            export_callback,
             inputs=[state],
             outputs=[export_files],
             api_name=False,
@@ -1600,7 +1697,7 @@ def create_app() -> gr.Blocks:
             render_state_trip,
             inputs=[state],
             outputs=[trip_json, timeline],
-        )
+        ).then(check_risks, inputs=[state, confirmed], outputs=risks, api_name=False)
         plan_render_event.then(
             persist_current_session,
             inputs=session_inputs,
@@ -1610,7 +1707,7 @@ def create_app() -> gr.Blocks:
         apply_local_button.click(
             apply_local_option, inputs=[local_choice, state],
             outputs=[trip_json, timeline, risks, state, plan_b, status, confirmed], api_name=False,
-        ).then(refresh_confidence, inputs=state, outputs=[confidence, low_confidence]).then(
+        ).then(lambda: ([], "", None), outputs=[chatbot, question, export_files], api_name=False).then(refresh_confidence, inputs=state, outputs=[confidence, low_confidence]).then(
             context_panels_for_state, inputs=state, outputs=[amap_status, inspection_status],
         ).then(
             persist_current_session, inputs=session_inputs, outputs=session_outputs,
@@ -1625,6 +1722,8 @@ def create_app() -> gr.Blocks:
             render_state_trip,
             inputs=[state],
             outputs=[trip_json, timeline],
+        ).then(check_risks, inputs=[state, confirmed], outputs=risks, api_name=False).then(
+            current_tool_trace, inputs=state, outputs=trace, api_name=False,
         )
         inspect_render_event.then(
             persist_current_session,
@@ -1680,7 +1779,7 @@ def create_app() -> gr.Blocks:
         state.change(completion_panel, inputs=state, outputs=[completion_section, completion_table, completion_message], api_name=False)
         state.change(local_options_view, inputs=state, outputs=[local_options_section, local_choice], api_name=False)
         state.change(
-            lambda current: gr.update(visible=isinstance((current or {}).get("trip"), dict)),
+            lambda current: gr.update(visible=isinstance((current or {}).get("trip"), dict) or isinstance((current or {}).get("draft_trip"), dict)),
             inputs=state, outputs=editor_section, api_name=False,
         )
     return demo

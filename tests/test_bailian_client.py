@@ -1,8 +1,9 @@
 import json
 
 import httpx
+import pytest
 
-from triptwin.bailian_client import BailianManagedAgentClient
+from triptwin.bailian_client import BailianManagedAgentClient, BailianApiError, BailianTimeoutError
 from triptwin.config import Settings
 
 
@@ -112,4 +113,30 @@ def test_run_turn_collects_tool_trace_and_final_message() -> None:
     assert len(run.tool_outputs) == 1
     assert "flyai-secret" not in run.model_dump_json()
     assert "***REDACTED***" in run.model_dump_json()
+
+
+def test_non_idempotent_messages_are_not_retried_after_timeout():
+    calls = []
+    def handler(request):
+        calls.append(request)
+        raise httpx.ReadTimeout("uncertain acceptance", request=request)
+    with httpx.Client(transport=httpx.MockTransport(handler), base_url="https://test.invalid") as http_client:
+        client = BailianManagedAgentClient(_settings(), client=http_client)
+        with pytest.raises(BailianApiError):
+            client.send_message("test-session", "test")
+    assert len(calls) == 1
+
+
+def test_timeout_requests_interrupt_for_this_session_only():
+    observed = []
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"events": []})
+        observed.append(json.loads(request.content))
+        return httpx.Response(200, json={"id": "test-event"})
+    with httpx.Client(transport=httpx.MockTransport(handler), base_url="https://test.invalid") as http_client:
+        client = BailianManagedAgentClient(_settings(), client=http_client)
+        with pytest.raises(BailianTimeoutError, match="已提交中断请求"):
+            client.run_turn("test-session", "test", timeout_seconds=0, cancel_on_failure=True)
+    assert observed[-1] == {"input": [{"role": "user", "type": "interrupt"}]}
 
