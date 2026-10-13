@@ -26,8 +26,8 @@ def test_default_public_limits(monkeypatch) -> None:
     ):
         monkeypatch.delenv(name, raising=False)
 
-    assert browser_limits() == {"questions": 20, "images": 30, "agent_runs": 4}
-    assert global_limits() == {"questions": 500, "images": 600, "agent_runs": 50}
+    assert browser_limits() == {"questions": 30, "images": 15, "agent_runs": 15}
+    assert global_limits() == {"questions": 500, "images": 300, "agent_runs": 350}
 
 
 def test_browser_usage_resets_and_stops_at_daily_limit(monkeypatch) -> None:
@@ -48,7 +48,7 @@ def test_browser_usage_resets_and_stops_at_daily_limit(monkeypatch) -> None:
 
 @pytest.mark.parametrize(
     "kind,browser_limit,global_limit",
-    [("questions", 20, 500), ("images", 30, 600), ("agent_runs", 4, 50)],
+    [("questions", 30, 500), ("images", 15, 300), ("agent_runs", 15, 350)],
 )
 def test_new_limits_enforced_across_browser_and_server(
     monkeypatch, tmp_path, kind, browser_limit, global_limit
