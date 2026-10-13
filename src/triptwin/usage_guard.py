@@ -22,14 +22,14 @@ def current_day() -> str:
 
 def browser_limits() -> dict[UsageKind, int]:
     return {
-        "questions": _positive_int("TRIPTWIN_BROWSER_QUESTION_LIMIT", 3),
-        "images": _positive_int("TRIPTWIN_BROWSER_IMAGE_LIMIT", 1),
+        "questions": _positive_int("TRIPTWIN_BROWSER_QUESTION_LIMIT", 5),
+        "images": _positive_int("TRIPTWIN_BROWSER_IMAGE_LIMIT", 2),
     }
 
 
 def global_limits() -> dict[UsageKind, int]:
     return {
-        "questions": _positive_int("TRIPTWIN_GLOBAL_QUESTION_LIMIT", 25),
+        "questions": _positive_int("TRIPTWIN_GLOBAL_QUESTION_LIMIT", 40),
         "images": _positive_int("TRIPTWIN_GLOBAL_IMAGE_LIMIT", 5),
     }
 

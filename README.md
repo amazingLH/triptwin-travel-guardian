@@ -83,14 +83,14 @@ DASHSCOPE_TEXT_MODEL=qwen3.7-flash
 DASHSCOPE_VISION_MODEL=qwen3.7-flash
 ```
 
-公开演示默认启用每日额度保护：每个浏览器最多 3 次自由问答和 1 次自行上传
-图片解析，全站最多 25 次自由问答和 5 次图片解析。重复问题使用浏览器缓存，
+公开演示默认启用每日额度保护：每个浏览器最多 5 次提问和 2 次自行上传
+图片解析，全站最多 40 次大模型问答和 5 次图片解析。重复问题使用浏览器缓存，
 不重复调用模型；模型调用事件不暴露具名公开 API。额度可通过以下普通环境变量调整：
 
 ```text
-TRIPTWIN_BROWSER_QUESTION_LIMIT=3
-TRIPTWIN_BROWSER_IMAGE_LIMIT=1
-TRIPTWIN_GLOBAL_QUESTION_LIMIT=25
+TRIPTWIN_BROWSER_QUESTION_LIMIT=5
+TRIPTWIN_BROWSER_IMAGE_LIMIT=2
+TRIPTWIN_GLOBAL_QUESTION_LIMIT=40
 TRIPTWIN_GLOBAL_IMAGE_LIMIT=5
 ```
 

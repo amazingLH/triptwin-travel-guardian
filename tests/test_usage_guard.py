@@ -4,10 +4,25 @@ import json
 
 from triptwin.usage_guard import (
     browser_can_consume,
+    browser_limits,
     consume_browser,
+    global_limits,
     normalize_browser_usage,
     reserve_global,
 )
+
+
+def test_default_public_limits(monkeypatch) -> None:
+    for name in (
+        "TRIPTWIN_BROWSER_QUESTION_LIMIT",
+        "TRIPTWIN_BROWSER_IMAGE_LIMIT",
+        "TRIPTWIN_GLOBAL_QUESTION_LIMIT",
+        "TRIPTWIN_GLOBAL_IMAGE_LIMIT",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    assert browser_limits() == {"questions": 5, "images": 2}
+    assert global_limits() == {"questions": 40, "images": 5}
 
 
 def test_browser_usage_resets_and_stops_at_daily_limit(monkeypatch) -> None:
