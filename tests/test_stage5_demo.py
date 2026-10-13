@@ -11,9 +11,11 @@ from triptwin.demo_service import (
 )
 
 
-def test_public_deployment_installs_src_layout_package() -> None:
+def test_public_deployment_bootstraps_src_layout_before_imports() -> None:
     requirements = Path("requirements.txt").read_text(encoding="utf-8")
-    assert "-e ." in requirements.splitlines()
+    # ModelScope installs requirements before copying the project into its
+    # image, so an editable local install cannot work during that build step.
+    assert "-e ." not in requirements.splitlines()
     assert Path("app.py").read_text(encoding="utf-8").find("sys.path.insert") > 0
 
 

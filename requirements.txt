@@ -1,4 +1,3 @@
--e .
 gradio>=5,<7
 pydantic>=2.9,<3
 httpx[socks]>=0.27,<1
