@@ -1046,7 +1046,7 @@ def create_app() -> gr.Blocks:
         gr.HTML(
             "<div class='quota-card'><b>使用额度说明：</b>作者腰包扁扁，短期内可承担的费用有限，"
             "后续将逐步增加 AI 使用次数。"
-            f"每个浏览器每天最多 {browser_limits()['questions']} 次提问、"
+            f"当前版本每个浏览器每天最多 {browser_limits()['questions']} 次提问、"
             f"{browser_limits()['images']} 次自行上传图片解析；"
             f"全站每天最多 {global_limits()['questions']} 次大模型问答、"
             f"{global_limits()['images']} 次图片解析；每位访客每天最多 "
