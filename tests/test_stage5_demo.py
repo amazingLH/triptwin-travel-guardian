@@ -81,7 +81,9 @@ def test_uploaded_trip_never_reuses_golden_cloud_evidence() -> None:
     }
     amap_panel, inspection_panel = app.run_manual_inspection_for_state(state)
 
-    assert "不会复用杭州合成示例" in amap_panel
+    assert "实时路线与天气尚未核验" in amap_panel
+    assert "不会复用杭州合成示例" not in amap_panel
+    assert "手动巡检" not in inspection_panel
     assert "38.9" not in amap_panel
     assert "未调用高德 MCP 或 Managed Agent" in inspection_panel
     assert "drun_" not in inspection_panel
@@ -94,6 +96,20 @@ def test_uploaded_trip_without_live_candidates_never_gets_golden_plan_b() -> Non
 
     assert "没有专属的实时 FlyAI 候选证据" in rendered
     assert "如家精选" not in rendered
+
+
+def test_uploaded_history_removes_obsolete_panel_instructions() -> None:
+    import app
+
+    state = {"trip": load_cached_vision()["trip"], "trip_source": "uploaded_image"}
+    panels = app.safe_context_panels(
+        state,
+        "### 🛰️ 当前上传行程 · 空间与天气核验\n不会复用杭州合成示例的路线或天气证据。",
+        "### ⏱️ 当前上传行程 · 主动巡检\n点击“手动巡检”可重新运行本地确定性风险规则。",
+    )
+    assert panels == app.context_panels_for_state(state)
+    assert "手动巡检" not in "".join(panels)
+    assert "不会复用杭州" not in "".join(panels)
 
 
 def test_legacy_blank_history_is_sanitized_on_restore() -> None:
@@ -304,7 +320,7 @@ def test_question_without_trip_context_returns_local_instruction(monkeypatch) ->
     )
 
     assert "请先上传行程单" in history[-1]["content"]
-    assert "载入合成示例" in history[-1]["content"]
+    assert "行程功能示例" in history[-1]["content"]
     assert store.get("usage", {}).get("questions", 0) == 0
 
 

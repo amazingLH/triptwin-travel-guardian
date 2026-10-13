@@ -78,11 +78,11 @@ EMPTY_INSPECTION_STATUS = (
 )
 UPLOADED_AMAP_PENDING = (
     "### 🛰️ 当前上传行程 · 空间与天气核验\n\n"
-    "尚未对这份行程执行实时高德 MCP 查询；不会复用杭州合成示例的路线或天气证据。"
+    "实时路线与天气尚未核验。"
 )
 UPLOADED_INSPECTION_PENDING = (
     "### ⏱️ 当前上传行程 · 主动巡检\n\n"
-    "尚未对这份行程执行云端主动巡检。点击“手动巡检”可重新运行本地确定性风险规则。"
+    "尚未执行实时核验。"
 )
 
 APP_CSS = """
@@ -234,6 +234,11 @@ def safe_context_panels(
             amap_text = default_amap
         if not inspection_text.startswith("### ⏱️ 当前上传行程"):
             inspection_text = default_inspection
+        # Older browser snapshots may still contain obsolete UI instructions.
+        if "不会复用杭州合成示例" in amap_text:
+            amap_text = default_amap
+        if "手动巡检" in inspection_text:
+            inspection_text = default_inspection
     return amap_text, inspection_text
 
 
@@ -293,11 +298,10 @@ def run_manual_inspection_for_state(
         UPLOADED_AMAP_PENDING,
         "\n".join(
             [
-                "### ⏱️ 当前上传行程 · 手动巡检",
+                "### ⏱️ 当前上传行程 · 本地风险复检",
                 "",
                 f"- 已重新运行当前 TripGraph 的本地确定性规则：**{analysis.risk_count} 个风险 / {analysis.total_risk_score} 分**",
                 "- 本次未调用高德 MCP 或 Managed Agent；需要实时外部证据的项目保持未核验。",
-                "- 未读取、展示或套用杭州合成示例的巡检记录。",
             ]
         ),
     )
@@ -324,7 +328,7 @@ def _is_functional_example(paths):
 def build_twin(image_paths: Any) -> tuple[str, list[list[Any]], str, str, dict[str, Any]]:
     paths = _image_paths(image_paths)
     if not paths:
-        raise gr.Error("请先上传图片或点击“载入合成示例”。")
+        raise gr.Error("请先上传图片，或展开“行程功能示例”并选择一个示例。")
     kind = example_kind(paths)
     if kind:
         trip_payload = example_trip(kind)
@@ -394,7 +398,7 @@ def build_twin_guarded(
 
     paths = _image_paths(image_paths)
     if not paths:
-        raise gr.Error("请先上传图片或点击“载入合成示例”。")
+        raise gr.Error("请先上传图片，或展开“行程功能示例”并选择一个示例。")
     store, _ = ensure_active_session(browser_store)
     client_key = _anonymous_client_key(request)
     client_reserved = False
@@ -870,7 +874,7 @@ def answer_question_guarded(
                     "role": "assistant",
                     "content": (
                         "请先上传行程单并构建旅行数字孪生，"
-                        "或点击“载入合成示例”后再提问。"
+                        "或展开“行程功能示例”、选择示例并完成第 2 步后再提问。"
                     ),
                 },
             ]
