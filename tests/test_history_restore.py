@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from PIL import Image
 
 from triptwin.browser_secrets import persistent_secret
-from triptwin.history_media import capture_previews, previews_html, sanitize_previews, MAX_PREVIEW_CHARS
+from triptwin.history_media import (
+    attach_original_reference, capture_previews, file_digest, previews_html,
+    restore_original, sanitize_previews, MAX_PREVIEW_CHARS,
+)
 from triptwin.session_history import create_session, ensure_active_session, save_active_session, switch_session
 from triptwin.functional_examples import example_trip
 
@@ -104,3 +108,89 @@ def test_actual_gradio_chatbot_blocks_are_not_discarded():
     assert isinstance(blocks[0]["content"], list)
     store = save_active_session(None, {"chat_history": blocks})
     assert store["sessions"][0]["snapshot"]["chat_history"] == raw
+
+
+def test_current_selection_and_blank_blur_never_update_any_component():
+    import app
+    store, first = ensure_active_session(None)
+    for selected in (first["id"], None, ""):
+        result = app.open_history_session(selected, store, {}, "尚未解析", False, "", "", "", [], "", "")
+        assert len(result) == len(app.initialize_session_history(None))
+        assert all(value == {"__type__": "update"} for value in result)
+
+
+def test_signed_original_references_reject_changes_and_outside_roots(tmp_path):
+    root = tmp_path / "uploads"
+    root.mkdir()
+    path = root / "原始车票.png"
+    Image.new("RGB", (100, 200), "blue").save(path)
+    photo = capture_previews([path])[0]
+    attach_original_reference(photo, path, "server-only-secret")
+    photo = sanitize_previews([photo])[0]
+    assert restore_original(photo, "server-only-secret", [root]) == path
+    assert restore_original(photo, "other-key", [root]) is None
+    assert restore_original(photo, "server-only-secret", [root / "different"]) is None
+    Image.new("RGB", (100, 200), "red").save(path)
+    assert restore_original(photo, "server-only-secret", [root]) is None
+
+
+def test_history_file_list_restores_exact_available_originals(monkeypatch, tmp_path):
+    import app
+    path = tmp_path / "原始车票.png"
+    Image.new("RGB", (100, 200), "blue").save(path)
+    photo = capture_previews([path])[0]
+    attach_original_reference(photo, path, app.HISTORY_FILE_SECRET)
+    monkeypatch.setattr(app.gr.utils, "get_upload_folder", lambda: str(tmp_path))
+    restored = app._restored_history_view({"snapshot": {"image_previews": [photo], "trip_state": {}}})
+    assert restored[0] == [str(path)]
+    assert "_history_preview_digests" not in restored[12]
+
+
+def test_expired_original_can_reparse_cached_results_without_calling_model(monkeypatch, tmp_path):
+    import app
+    path = tmp_path / "历史车票.png"
+    Image.new("RGB", (100, 200), "blue").save(path)
+    photos = capture_previews([path])
+    path.unlink()
+    monkeypatch.setattr(app.gr.utils, "get_upload_folder", lambda: str(tmp_path))
+    trip = example_trip("multi")
+    snapshot = app._session_snapshot({"trip": trip, "trip_source": "uploaded_image"}, "已构建", True, "saved-risk", "saved-plan", "saved-trace", [], "", "", photos)
+    restored = app._restored_history_view({"snapshot": snapshot})
+    assert restored[0] and all(Path(p).is_file() for p in restored[0])
+    assert Path(restored[0][0]).name == "历史车票.png"
+    assert restored[12]["_history_preview_digests"] == [file_digest(Path(restored[0][0]))]
+    monkeypatch.setattr(app, "build_twin_guarded", lambda *a: (_ for _ in ()).throw(AssertionError("must not call cloud")))
+    result = app.parse_current_import(restored[0], False, None, restored[12])
+    assert json.loads(result[0]) == trip
+    assert "复用此会话" in result[4]["parse_summary"]
+    assert result[-1]["usage"]["images"] == 0
+    assert all(value == {"__type__": "update"} for value in app.reset_after_parse(result[4]))
+    saved = app._session_snapshot(result[4], "ok", True, "risk", "plan", "trace", [], "", "")
+    assert not any(key.startswith("_history_") for key in saved["trip_state"])
+
+
+def test_available_original_reparse_uses_normal_quota_guard(monkeypatch, tmp_path):
+    import app
+    path = tmp_path / "原图.png"
+    Image.new("RGB", (100, 200), "blue").save(path)
+    called = []
+    def guarded(*args):
+        called.append(args)
+        return "normal-result"
+    monkeypatch.setattr(app, "build_twin_guarded", guarded)
+    assert app.parse_current_import([path], False, None, {"trip": example_trip("multi")}) == "normal-result"
+    assert called[0][0] == [path]
+
+
+def test_removing_an_expired_file_invalidates_cached_trip_but_never_recognizes_thumbnail(monkeypatch, tmp_path):
+    import app
+    import pytest
+    path = tmp_path / "预览.png"
+    Image.new("RGB", (100, 200), "blue").save(path)
+    state = {"trip": example_trip("multi"), "_history_preview_digests": [file_digest(path)]}
+    reset = app.reset_import_for_files([path], state)
+    assert "trip" not in reset[0]
+    assert reset[0]["_history_preview_digests"]
+    monkeypatch.setattr(app, "build_twin_guarded", lambda *a: (_ for _ in ()).throw(AssertionError("must not call cloud")))
+    with pytest.raises(Exception, match="请重新上传原图"):
+        app.parse_current_import([path], False, None, reset[0])

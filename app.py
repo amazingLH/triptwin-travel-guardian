@@ -46,7 +46,10 @@ from triptwin.session_history import (
     save_active_session,
     switch_session,
 )
-from triptwin.history_media import capture_previews, previews_html, sanitize_previews
+from triptwin.history_media import (
+    attach_original_reference, capture_previews, file_digest, materialize_preview,
+    previews_html, restore_original, sanitize_previews,
+)
 from triptwin.browser_secrets import persistent_secret
 from triptwin.runtime_agent import run_live_trip
 from triptwin.exporter import export_trip_files
@@ -152,6 +155,8 @@ _LOCAL_ENV = dotenv_values(PROJECT_ROOT / ".env")
 _LOCAL_SECRET_DIR = Path(os.getenv("LOCALAPPDATA") or os.getenv("XDG_STATE_HOME") or tempfile.gettempdir()) / "triptwin" / hashlib.sha256(str(PROJECT_ROOT).encode()).hexdigest()[:16]
 BROWSER_STATE_SECRET = persistent_secret(os.getenv("TRIPTWIN_BROWSER_STATE_SECRET") or _LOCAL_ENV.get("TRIPTWIN_BROWSER_STATE_SECRET"), _LOCAL_SECRET_DIR, "browser-state-secret")
 RATE_LIMIT_SALT = persistent_secret(os.getenv("TRIPTWIN_RATE_LIMIT_SALT") or _LOCAL_ENV.get("TRIPTWIN_RATE_LIMIT_SALT"), _LOCAL_SECRET_DIR, "rate-limit-salt")
+HISTORY_FILE_SECRET = persistent_secret(None, _LOCAL_SECRET_DIR, "history-file-signing-secret")
+HISTORY_VIEW_OUTPUT_COUNT = 25
 
 
 def live_evidence_is_recent(state):
@@ -276,6 +281,18 @@ def reset_import_view() -> tuple[Any, ...]:
         "### 风险卡片\n\n等待检查。", "### 原方案 / Plan B\n\n等待生成。",
         "### Agent 工具执行轨迹摘要\n\n等待生成。", "", [], None,
     )
+
+
+def reset_import_for_files(files, current):
+    result = list(reset_import_view())
+    expired = (current or {}).get("_history_preview_digests") or []
+    retained = []
+    for path in _image_paths(files):
+        if path.is_file() and file_digest(path) in expired:
+            retained.append(file_digest(path))
+    if retained:
+        result[0] = {"_history_preview_digests": retained}
+    return tuple(result)
 
 
 def reset_downstream_view():
@@ -480,6 +497,30 @@ def build_twin_guarded(
     if not _is_functional_example(paths):
         store["usage"] = consume_browser(usage, "images")
     return *result, store
+
+
+def parse_current_import(files, privacy_confirmed, browser_store, current, request: gr.Request | None = None):
+    """Permit history re-parsing, but never pass a low-resolution fallback to LLM."""
+    current = dict(current or {})
+    paths = _image_paths(files)
+    expired = current.get("_history_preview_digests") or []
+    if any(path.is_file() and file_digest(path) in expired for path in paths) or (
+        not paths and isinstance(current.get("trip") or current.get("draft_trip"), dict)
+    ):
+        if not isinstance(current.get("trip") or current.get("draft_trip"), dict):
+            raise gr.Error("这份历史行程的原图已过期，当前显示的是预览副本；尚无可复用的完整解析。请重新上传原图后解析，预览不会替代原图发送给模型。本次不消耗解析次数。")
+        current["_history_cached_parse"] = True
+        current["parse_summary"] = "原图已过期，本次复用此会话已保存的解析结果，保留已确认信息；未重新调用模型，不消耗解析次数。重新识别请上传原图。"
+        view = _session_view({"snapshot": {"trip_state": current}})
+        store, _ = ensure_active_session(browser_store)
+        return view[2], view[3], view[4], view[5], current, store
+    return build_twin_guarded(files, privacy_confirmed, browser_store, request)
+
+
+def reset_after_parse(current):
+    if (current or {}).get("_history_cached_parse"):
+        return (*(gr.skip() for _ in range(6)), gr.skip())
+    return *reset_downstream_view(), False
 
 
 def completion_panel(state):
@@ -1187,6 +1228,8 @@ def _session_snapshot(
     question_text: str | None = None,
 ) -> dict[str, Any]:
     trip_state = dict(trip_state or {})
+    for key in ("_history_preview_digests", "_history_cached_parse"):
+        trip_state.pop(key, None)
     if isinstance(trip_state.get("draft_trip"), dict) and isinstance(completion_values, list):
         trip_state["completion_rows"] = completion_values
     safe_amap, safe_inspection = safe_context_panels(
@@ -1279,16 +1322,38 @@ def _session_view(session: dict[str, Any]) -> tuple[Any, ...]:
 def _restored_history_view(session: dict[str, Any]) -> tuple[Any, ...]:
     """Restore every visible panel directly, including unchanged State values."""
     snapshot = session.get("snapshot") or {}
-    state = snapshot.get("trip_state") or {}
+    state = dict(snapshot.get("trip_state") or {})
     previews = sanitize_previews(snapshot.get("image_previews"))
     # Old public examples can recover previews from known assets, not arbitrary paths.
-    if not previews and state.get("trip_source") == "synthetic_example":
-        previews = capture_previews([SAMPLE_IMAGE_PATH])
-    elif not previews and state.get("trip_source") == "ticket_example":
+    known_paths = []
+    if state.get("trip_source") == "synthetic_example":
+        known_paths = [SAMPLE_IMAGE_PATH]
+    elif state.get("trip_source") == "ticket_example":
         trip = state.get("trip") or {}
-        previews = capture_previews(example_paths("conflict" if len(trip.get("events", [])) == 3 else "multi"))
+        known_paths = example_paths("conflict" if len(trip.get("events", [])) == 3 else "multi")
+    if not previews and known_paths:
+        previews = capture_previews(known_paths)
+    files = []
+    expired = []
+    for photo in previews:
+        original = restore_original(photo, HISTORY_FILE_SECRET, [Path(gr.utils.get_upload_folder()), PROJECT_ROOT / "assets"])
+        if original is None:
+            # Public examples only: recover exactly known, authorized assets.
+            original = next((path for path in known_paths if path.name == photo["name"]), None)
+        if original is None:
+            try:
+                original = materialize_preview(photo, Path(gr.utils.get_upload_folder()))
+                expired.append(file_digest(original))
+            except (OSError, ValueError):
+                continue
+        files.append(str(original))
+    if expired:
+        state["_history_preview_digests"] = expired
+    snapshot = {**snapshot, "trip_state": state}
+    view = list(_session_view({"snapshot": snapshot}))
+    view[0] = files or None
     return (
-        *_session_view(session), previews,
+        *view, previews,
         gr.update(value=previews_html(previews), visible=bool(previews)),
         *completion_panel(state),
         gr.update(visible=isinstance(state.get("trip"), dict) or isinstance(state.get("draft_trip"), dict)),
@@ -1383,8 +1448,10 @@ def open_history_session(
     completion_values: Any = None,
     question_text: str | None = None,
 ) -> tuple[Any, ...]:
-    if not target_id:
-        raise gr.Error("请先选择一个历史会话。")
+    if not target_id or target_id == (browser_store or {}).get("active_id"):
+        # Dropdown blur can emit input even when selection never changed.
+        # Leave ALL components untouched, especially File and unsaved edits.
+        return tuple(gr.skip() for _ in range(3 + HISTORY_VIEW_OUTPUT_COUNT))
     snapshot = _session_snapshot(
         trip_state,
         status,
@@ -1479,8 +1546,8 @@ def create_app() -> gr.Blocks:
                 label="隐私提醒状态", visible=False
             )
             gr.Markdown("支持 12306 车票、机票、酒店订单或完整行程截图，**无需固定模板**。截图缺少的必要信息会在第 2 步提示手动补充；也可清空后上传更详细的行程截图。请裁掉广告并遮挡姓名、订单号、流水号等信息。")
-            gr.Markdown("自行上传的截图会发送至百炼解析，系统不会自动给原图打码。服务器临时上传与导出文件约 1–2 小时后清理；过期后请重新上传或导出。")
-            gr.Markdown("历史会话会在本浏览器保存小尺寸截图预览和已解析行程；切换或刷新不会重新调用模型。原图过期不影响查看已保存结果，但再次解析需重新上传。旧版本未保存的截图无法补回，请重新上传。")
+            gr.Markdown("自行上传的截图会发送至百炼解析，系统不会自动给原图打码。服务器临时上传与导出文件约 1–2 小时后清理；原图过期后仍可查看和使用已保存的行程，重新识别原图或下载原图需重新上传，导出文件可重新生成。")
+            gr.Markdown("历史会话恢复文件列表、截图预览和已解析行程。原图仍有效时可再次解析（正常计入额度）；原图过期时，点击解析会复用该会话已保存结果，不将低清预览当原图重新识别、不消耗解析次数。尚未解析过或希望重新识别时，请重新上传原图。旧版本未保存的截图无法补回。")
         with gr.Column(elem_id="step-build", elem_classes=["step-card"]):
             gr.HTML("<div class='step-heading'><span class='step-number'>2</span><div><h2>解析、补全与构建</h2><p>先解析截图，再补全并确认必要信息，构建完成后继续第 3 步。合成示例的信息已完整。</p></div></div>")
             build_button = gr.Button("② 解析行程截图", variant="primary")
@@ -1635,14 +1702,24 @@ def create_app() -> gr.Blocks:
         load_event = single_example_button.click(
             reset_import_view, outputs=import_outputs, api_name=False,
         ).then(load_example, outputs=[image, status, state], api_name="load_example")
-        def capture_import_preview(files):
-            return import_preview(files, preview), capture_previews(_image_paths(files))
+        def capture_import_preview(files, current):
+            paths = _image_paths(files)
+            photos = []
+            expired = (current or {}).get("_history_preview_digests") or []
+            for path in paths[:5]:
+                captured = capture_previews([path])
+                if captured:
+                    photo = captured[0]
+                    if file_digest(path) not in expired:
+                        attach_original_reference(photo, path, HISTORY_FILE_SECRET)
+                    photos.append(photo)
+            return import_preview(files, preview), photos
 
         # Only actual upload/delete/clear actions capture new media. Restoring a
         # session programmatically must not clear its saved previews/results.
         for event in (image.upload, image.clear, image.delete):
-            event(reset_import_view, outputs=import_outputs, api_name=False).then(
-                capture_import_preview, inputs=image, outputs=[preview, image_previews], api_name=False,
+            event(reset_import_for_files, inputs=[image, state], outputs=import_outputs, api_name=False).then(
+                capture_import_preview, inputs=[image, state], outputs=[preview, image_previews], api_name=False,
             ).then(persist_current_session, inputs=session_inputs, outputs=session_outputs)
         load_context_event = load_event.then(
             context_panels_for_state,
@@ -1658,27 +1735,27 @@ def create_app() -> gr.Blocks:
                 make_loader(kind), outputs=[image, status, state], api_name=False,
             )
             selected_event.then(context_panels_for_state, inputs=state, outputs=[amap_status, inspection_status]).then(
-                capture_import_preview, inputs=image, outputs=[preview, image_previews], api_name=False,
+                capture_import_preview, inputs=[image, state], outputs=[preview, image_previews], api_name=False,
             ).then(
                 persist_current_session, inputs=session_inputs, outputs=session_outputs,
             )
         clear_import_button.click(lambda: None, outputs=image, api_name=False).then(
             reset_import_view, outputs=import_outputs,
         ).then(completion_panel, inputs=state, outputs=[completion_section, completion_table, completion_message]).then(
-            capture_import_preview, inputs=image, outputs=[preview, image_previews], api_name=False,
+            capture_import_preview, inputs=[image, state], outputs=[preview, image_previews], api_name=False,
         ).then(
             persist_current_session, inputs=session_inputs, outputs=session_outputs,
         )
         load_context_event.then(
-            capture_import_preview, inputs=image, outputs=[preview, image_previews], api_name=False,
+            capture_import_preview, inputs=[image, state], outputs=[preview, image_previews], api_name=False,
         ).then(
             persist_current_session,
             inputs=session_inputs,
             outputs=session_outputs,
         )
         build_event = build_button.click(
-            build_twin_guarded,
-            inputs=[image, privacy_confirmed, history_store],
+            parse_current_import,
+            inputs=[image, privacy_confirmed, history_store, state],
             outputs=[
                 trip_json,
                 confidence,
@@ -1694,7 +1771,7 @@ def create_app() -> gr.Blocks:
             ) + str(current.get("parse_summary", "")),
             inputs=[state],
             outputs=status,
-        ).then(lambda: (*reset_downstream_view(), False), outputs=[*downstream_outputs, confirmed], api_name=False)
+        ).then(reset_after_parse, inputs=state, outputs=[*downstream_outputs, confirmed], api_name=False)
         build_event.then(completion_panel, inputs=state, outputs=[completion_section, completion_table, completion_message])
         confirm_import_button.click(
             confirm_import, inputs=[completion_table, state],
