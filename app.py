@@ -8,6 +8,8 @@ import json
 import os
 import secrets
 import sys
+from html import escape
+from urllib.parse import quote
 from pathlib import Path
 from typing import Any
 
@@ -94,6 +96,11 @@ APP_CSS = """
 .session-bar {border:1px solid #d9e2f2;border-radius:14px;background:#f8fafc;padding:10px 14px}
 .quota-card {background:#fff7ed;border:1px solid #fdba74;border-radius:14px;padding:12px 16px;color:#7c2d12}
 .quota-card b {color:#9a3412}
+.import-photo-list {max-height:340px;overflow-y:auto;overscroll-behavior:contain;border:1px solid #d6e2f2;border-radius:12px;background:#f5f8fe;scrollbar-gutter:stable}
+.import-photo-list figure {margin:0;padding:8px;border-bottom:1px solid #d6e2f2}
+.import-photo-list figure:last-child {border-bottom:0}
+.import-photo-list img {display:block;width:100%;height:300px;object-fit:contain;cursor:default}
+.import-photo-list figcaption {font-size:12px;color:#566880;text-align:center;overflow-wrap:anywhere;margin-top:4px}
 .gradio-container {max-width:1180px!important;margin:auto!important}
 .step-card {border:1px solid #e0e7f3!important;border-radius:18px!important;background:#fff!important;padding:20px!important;box-shadow:0 3px 16px #17233c06;margin-top:12px!important}
 .step-heading {display:flex;gap:12px;align-items:center;margin-bottom:8px}
@@ -443,11 +450,15 @@ def confirm_import(rows, state):
     )
 
 
-def import_preview(files):
+def import_preview(files, block):
     paths = _image_paths(files)
-    return gr.update(value=[(str(path), f"行程截图 {index + 1}") for index, path in enumerate(paths)],
-                     columns=1 if len(paths) <= 1 else 2 if len(paths) <= 4 else 3,
-                     height=340 if len(paths) == 1 else 280, visible=bool(paths))
+    photos = []
+    for path in paths:
+        cached = block.move_resource_to_block_cache(str(path))
+        name = escape(path.name, quote=True)
+        url = "gradio_api/file=" + quote(str(cached), safe="")
+        photos.append(f'<figure title="{name}"><img src="{url}" alt="{name}" title="{name}"><figcaption>{name}</figcaption></figure>')
+    return gr.update(value='<div class="import-photo-list" aria-label="已导入截图">' + "".join(photos) + "</div>", visible=bool(paths))
 
 
 def _anonymous_client_key(request: gr.Request | None) -> str:
@@ -1184,20 +1195,12 @@ def create_app() -> gr.Blocks:
                 )
                 with gr.Column(scale=2, min_width=260):
                     load_button = gr.Button("载入合成示例", variant="secondary")
-                    preview = gr.Gallery(value=[], label="已导入截图 · 点击放大", columns=1,
-                                         height=340, object_fit="contain", interactive=False,
-                                         allow_preview=True, visible=False)
+                    preview = gr.HTML(value="", visible=False)
                     clear_import_button = gr.Button("清空已导入行程", variant="secondary")
             privacy_confirmed = gr.Checkbox(
                 label="自行上传前，我已遮挡身份证号、手机号和票号（合成示例无需勾选）"
             )
             gr.Markdown("支持 12306 车票、机票、酒店订单或完整行程截图，**无需固定模板**。截图缺少的必要信息会在第 2 步提示手动补充；也可清空后上传更详细的行程截图。请裁掉广告并遮挡姓名、订单号、流水号等信息。")
-            with gr.Accordion("行程格式示例 · 点击图片可放大（仅供参考）", open=False):
-                gr.Gallery(
-                    value=[(str(SAMPLE_IMAGE_PATH), "合成完整行程示例；普通订单截图同样支持")],
-                    columns=1, height=260, object_fit="contain", interactive=False,
-                    allow_preview=True, show_label=False,
-                )
         with gr.Column(elem_id="step-build", elem_classes=["step-card"]):
             gr.HTML("<div class='step-heading'><span class='step-number'>2</span><div><h2>解析、补全与构建</h2><p>先解析截图，再补全并确认必要信息，构建完成后继续第 3 步。合成示例的信息已完整。</p></div></div>")
             build_button = gr.Button("② 解析行程截图", variant="primary")
@@ -1340,8 +1343,10 @@ def create_app() -> gr.Blocks:
             inputs=state,
             outputs=[amap_status, inspection_status],
         )
-        load_event.then(import_preview, inputs=image, outputs=preview)
-        image.change(import_preview, inputs=image, outputs=preview, api_name=False)
+        def preview_callback(files):
+            return import_preview(files, preview)
+        load_event.then(preview_callback, inputs=image, outputs=preview)
+        image.change(preview_callback, inputs=image, outputs=preview, api_name=False)
         clear_import_button.click(lambda: None, outputs=image, api_name=False).then(
             reset_import_view, outputs=import_outputs,
         ).then(completion_panel, inputs=state, outputs=[completion_section, completion_table, completion_message]).then(
