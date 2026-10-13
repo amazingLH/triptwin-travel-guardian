@@ -106,20 +106,20 @@ APP_CSS = """
 #tripgraph-editor .cm-editor {height:100%!important;max-height:100%!important}
 #tripgraph-editor .cm-scroller {height:100%!important;max-height:100%!important;overflow-y:auto!important}
 /* Keep ambient motion behind stationary, readable cards. */
-body {background:#080f24!important;isolation:isolate}
+body {background:#172440!important;isolation:isolate}
 gradio-app {background:transparent!important}
-body::before {content:"";position:fixed;inset:-20%;z-index:-2;pointer-events:none;background:radial-gradient(ellipse at 18% 24%,#145b86 0%,transparent 42%),radial-gradient(ellipse at 82% 28%,#4c267f 0%,transparent 40%),radial-gradient(ellipse at 50% 86%,#123c60 0%,transparent 45%),#080f24;animation:aurora-drift 26s ease-in-out infinite alternate;will-change:transform}
+body::before {content:"";position:fixed;inset:-20%;z-index:-2;pointer-events:none;background:radial-gradient(ellipse at 18% 24%,#28769d 0%,transparent 42%),radial-gradient(ellipse at 82% 28%,#684494 0%,transparent 40%),radial-gradient(ellipse at 50% 86%,#275477 0%,transparent 45%),#172440;animation:aurora-drift 26s ease-in-out infinite alternate;will-change:transform}
 body::after {content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;background-image:linear-gradient(#7bc9ff09 1px,transparent 1px),linear-gradient(90deg,#7bc9ff09 1px,transparent 1px);background-size:54px 54px;mask-image:linear-gradient(to bottom,#000,transparent 95%)}
 .gradio-container {background:transparent!important;padding-top:24px!important;padding-bottom:36px!important}
-.hero {position:relative;overflow:hidden;background:linear-gradient(115deg,#102c46e8,#25204ce8);border:1px solid #72c9ff66;box-shadow:0 16px 60px #0004,inset 0 1px 0 #ffffff14;padding:30px}
+.hero {position:relative;overflow:hidden;background:linear-gradient(115deg,#244562e8,#403965e8);border:1px solid #72c9ff66;box-shadow:0 16px 60px #0004,inset 0 1px 0 #ffffff14;padding:30px}
 .hero::before {content:"";position:absolute;width:280px;height:280px;right:-60px;top:-170px;border-radius:50%;background:#67bfff28;filter:blur(25px);pointer-events:none}
 .hero h1 {color:#f0f8ff;letter-spacing:.5px}.hero p {color:#b7cfe4;line-height:1.8}
 .step-card {background:linear-gradient(135deg,#fffffff7,#eef5fff5)!important;border:1px solid #b8d7f7aa!important;border-radius:20px!important;box-shadow:0 12px 38px #0003,inset 0 1px 0 #fff!important}
 .step-number {background:linear-gradient(140deg,#277ad6,#7151e8);box-shadow:0 4px 14px #536fe640}
 .step-nav a {color:#d5eaff;background:#1a3158b3;border:1px solid #8cbcff40;transition:background .2s,box-shadow .2s}
 .step-nav a:hover {background:#304778;box-shadow:0 0 18px #6fa9ff30}
-.quota-card {background:#17233fe8;color:#d3dfef;border-color:#7699cd55;line-height:1.8;box-shadow:0 8px 26px #0002}.quota-card b {color:#a9d9ff}
-#service-notice {background:#101d33c9;border:1px solid #799ecb33;border-radius:14px;padding:10px 16px;color:#cfdeee!important}
+.quota-card {background:#2b3b58e8;color:#d3dfef;border-color:#7699cd55;line-height:1.8;box-shadow:0 8px 26px #0002}.quota-card b {color:#a9d9ff}
+#service-notice {background:#253751c9;border:1px solid #799ecb33;border-radius:14px;padding:10px 16px;color:#cfdeee!important}
 #service-notice p,#service-notice strong {color:#cfdeee!important}#service-notice blockquote {border-color:#70b9ef}
 #session-management {background:#eaf3fff2;border:1px solid #bbdcff80;border-radius:14px;box-shadow:0 8px 25px #0002}
 .guide-card {background:linear-gradient(120deg,#edf6ff,#f4f0ff);border-color:#ccdafa}.guide-card h3 {color:#314a83}.guide-card p,.guide-card li,.example-free-note {color:#4b5d80}
