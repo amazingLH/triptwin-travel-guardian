@@ -100,6 +100,11 @@ def build_twin(image_path: str | None) -> tuple[Any, list[list[Any]], str, str, 
         "trip": trip_payload,
         "low_confidence_fields": low_fields,
         "field_confidence": confidence,
+        "trip_source": (
+            "synthetic_example"
+            if _same_image(image, SAMPLE_IMAGE_PATH)
+            else "uploaded_image"
+        ),
     }
     status = f"✅ `{model}` 图片解析完成；{request_note}。"
     return trip_payload, rows, low_text, timeline_html(trip_payload), state
@@ -198,6 +203,20 @@ def answer_question_guarded(
         else load_cached_vision()["trip"]
     )
     store, _ = ensure_active_session(browser_store)
+
+    # The bundled golden case is fixed and fully verified.  Answer its common
+    # showcase questions locally so they are instant and consume no model quota.
+    deterministic_answer = _synthetic_example_answer(text, state)
+    if deterministic_answer is not None:
+        conversation = list(history or [])
+        conversation.extend(
+            [
+                {"role": "user", "content": text},
+                {"role": "assistant", "content": deterministic_answer},
+            ]
+        )
+        return "", conversation, store
+
     cache_key = _answer_cache_key(text, trip_payload)
     cached = store.get("answer_cache", {}).get(cache_key)
     if isinstance(cached, str) and cached.strip():
@@ -237,6 +256,51 @@ def answer_question_guarded(
     return "", conversation, store
 
 
+def _synthetic_example_answer(
+    question: str, state: dict[str, Any] | None
+) -> str | None:
+    """Return verified local answers for common questions about the golden case."""
+
+    if not isinstance(state, dict) or state.get("trip_source") != "synthetic_example":
+        return None
+    normalized = "".join(
+        character
+        for character in question.casefold()
+        if character.isalnum() or "\u4e00" <= character <= "\u9fff"
+    )
+    if "衔接" in normalized and ("风险" in normalized or "为什么" in normalized):
+        return (
+            "存在衔接风险：高铁 10:00 到达杭州东站，西湖游船 10:35 开始，"
+            "中间只有 35 分钟；行程预计需要 45 分钟交通，再加 20 分钟安全缓冲，"
+            "合计至少需要 65 分钟，目前缺少 30 分钟。建议保留高铁，顺延或替换游船。"
+        )
+    if "第二晚" in normalized and any(
+        keyword in normalized for keyword in ("推荐", "住哪", "酒店", "住宿")
+    ):
+        return (
+            "第二晚推荐 **如家精选-杭州西湖景区苏堤店**：2026-10-19 入住、"
+            "10月20日退房，查询价约 **¥135/晚**，低于 Plan B 的 ¥500 增量上限。"
+            "该候选来自 FlyAI 酒店查询，价格和房态请以跳转后的飞猪页面为准；"
+            "TripTwin 不会代订。"
+        )
+    if "自动" in normalized and any(
+        keyword in normalized for keyword in ("预定", "预订", "下单", "支付")
+    ):
+        return (
+            "不会。TripTwin 只进行风险分析并提供带来源链接的候选，"
+            "不会替你预订、下单或支付；最终选择和操作始终由你完成。"
+        )
+    if "候选" in normalized and any(
+        keyword in normalized for keyword in ("来源", "来自", "哪来", "数据")
+    ):
+        return (
+            "Plan B 的景点和酒店候选来自官方 FlyAI Skill 的真实查询结果，"
+            "并保留飞猪 jumpUrl 作为来源证据，不是由模型编造；"
+            "路线和天气核验则来自高德地图 MCP。"
+        )
+    return None
+
+
 def _answer_cache_key(question: str, trip_payload: dict[str, Any]) -> str:
     normalized_question = " ".join(question.casefold().split())
     payload = json.dumps(
@@ -260,7 +324,7 @@ def _quota_answer(
             {
                 "role": "assistant",
                 "content": (
-                    f"{reason}，为避免免费 Token 被耗尽，本次不再调用模型。"
+                    f"{reason}，为控制使用费用，本次不再调用模型。"
                     "合成示例、风险检查和 Plan B 仍可继续使用。"
                 ),
             },
@@ -460,7 +524,7 @@ def create_app() -> gr.Blocks:
         )
         gr.HTML("<div class='hero'><h1>TripTwin 旅行数字孪生守护者</h1><p>把行程截图变成 TripGraph，结合真实 FlyAI 与高德 MCP 证据发现衔接、日期、预算、天气和体力风险，并生成可验证 Plan B。</p></div>")
         gr.HTML(
-            "<div class='quota-card'><b>免费额度保护说明：</b>本站使用有限的百炼免费 Token。"
+            "<div class='quota-card'><b>使用额度说明：</b>腰包扁扁，费用有限。"
             f"每个浏览器每天最多 {browser_limits()['questions']} 次自由问答、"
             f"{browser_limits()['images']} 次自行上传图片解析；"
             f"全站每天最多 {global_limits()['questions']} 次自由问答、"

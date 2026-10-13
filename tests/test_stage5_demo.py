@@ -93,6 +93,56 @@ def test_public_chat_reuses_browser_cache_without_second_model_call(monkeypatch)
     assert repeated_history[-1]["content"] == history[-1]["content"]
 
 
+def test_synthetic_common_question_uses_local_answer_without_quota(monkeypatch) -> None:
+    import app
+
+    monkeypatch.setattr(
+        app,
+        "answer_with_trip_context",
+        lambda *_: (_ for _ in ()).throw(AssertionError("model must not be called")),
+    )
+    monkeypatch.setattr(
+        app,
+        "reserve_global",
+        lambda *_: (_ for _ in ()).throw(AssertionError("quota must not be used")),
+    )
+    state = {
+        "trip": load_cached_vision()["trip"],
+        "trip_source": "synthetic_example",
+    }
+
+    _, history, store = app.answer_question_guarded(
+        "是否会自动预定？", [], state, None
+    )
+
+    assert "不会替你预订" in history[-1]["content"]
+    assert store.get("usage", {}).get("questions", 0) == 0
+
+
+def test_uploaded_trip_common_question_still_uses_model(monkeypatch) -> None:
+    import app
+
+    calls = {"count": 0}
+
+    def fake_answer(*_):
+        calls["count"] += 1
+        return "根据用户上传的当前行程回答。"
+
+    monkeypatch.setattr(app, "answer_with_trip_context", fake_answer)
+    monkeypatch.setattr(app, "reserve_global", lambda kind: (True, 1, 25))
+    state = {
+        "trip": load_cached_vision()["trip"],
+        "trip_source": "uploaded_image",
+    }
+
+    _, history, _ = app.answer_question_guarded(
+        "是否会自动预定？", [], state, None
+    )
+
+    assert calls["count"] == 1
+    assert history[-1]["content"] == "根据用户上传的当前行程回答。"
+
+
 def test_public_chat_stops_after_browser_daily_limit(monkeypatch) -> None:
     import app
     from triptwin.usage_guard import current_day
