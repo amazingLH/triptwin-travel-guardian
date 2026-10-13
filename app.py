@@ -21,12 +21,12 @@ import gradio as gr
 from triptwin.demo_service import (
     SAMPLE_IMAGE_PATH,
     active_inspection_markdown,
+    analyze_trip,
     amap_inspection_markdown,
     chat_context,
     load_cached_vision,
     plan_b_markdown,
     risk_markdown,
-    run_cached_manual_inspection,
     timeline_html,
     tool_trace_markdown,
 )
@@ -51,6 +51,25 @@ from triptwin.usage_guard import (
 DISCLAIMER = (
     "价格、库存及开放时间具有时效性；结果仅用于风险分析与候选推荐。"
     "TripTwin 不代订、不支付；上传图片前请遮挡身份证号、手机号和票号。"
+    "历史会话按当前浏览器隔离；公开合成示例的证据由所有访客共享，"
+    "用户上传行程不会复用该示例结果。"
+)
+
+EMPTY_AMAP_STATUS = (
+    "### 🛰️ 空间与天气核验\n\n"
+    "等待上传行程并构建旅行数字孪生，或载入并构建公开合成示例。"
+)
+EMPTY_INSPECTION_STATUS = (
+    "### ⏱️ 主动巡检\n\n"
+    "等待上传行程并构建旅行数字孪生，或载入并构建公开合成示例。"
+)
+UPLOADED_AMAP_PENDING = (
+    "### 🛰️ 当前上传行程 · 空间与天气核验\n\n"
+    "尚未对这份行程执行实时高德 MCP 查询；不会复用杭州合成示例的路线或天气证据。"
+)
+UPLOADED_INSPECTION_PENDING = (
+    "### ⏱️ 当前上传行程 · 主动巡检\n\n"
+    "尚未对这份行程执行云端主动巡检。点击“手动巡检”可重新运行本地确定性风险规则。"
 )
 
 APP_CSS = """
@@ -74,6 +93,103 @@ def load_example() -> tuple[str, str, dict[str, str]]:
         str(SAMPLE_IMAGE_PATH),
         "✅ 已载入完全虚构的黄金案例，无真实个人信息。",
         {"trip_source": "synthetic_example"},
+    )
+
+
+def _sample_panel(markdown: str, title: str) -> str:
+    """Label cached competition evidence so it cannot be mistaken for user data."""
+
+    body = markdown.split("\n", 1)[1].lstrip() if "\n" in markdown else markdown
+    return (
+        f"### {title}\n\n"
+        "> **公开合成示例证据：** 以下结果属于所有访客共享的杭州虚构案例，"
+        "不含真实个人信息，也不是当前访客的历史记录。\n\n"
+        f"{body}"
+    )
+
+
+def context_panels_for_state(
+    state: dict[str, Any] | None,
+) -> tuple[str, str]:
+    """Return truthful evidence panels for the current browser session state."""
+
+    if not isinstance(state, dict) or not isinstance(state.get("trip"), dict):
+        return EMPTY_AMAP_STATUS, EMPTY_INSPECTION_STATUS
+    if state.get("trip_source") == "synthetic_example":
+        return (
+            _sample_panel(
+                amap_inspection_markdown(),
+                "🛰️ 合成示例 · 空间与天气核验",
+            ),
+            _sample_panel(
+                active_inspection_markdown(),
+                "⏱️ 合成示例 · 主动巡检",
+            ),
+        )
+    return UPLOADED_AMAP_PENDING, UPLOADED_INSPECTION_PENDING
+
+
+def safe_context_panels(
+    state: dict[str, Any] | None,
+    saved_amap: Any = None,
+    saved_inspection: Any = None,
+) -> tuple[str, str]:
+    """Reject legacy/shared panels that do not belong to the current state."""
+
+    default_amap, default_inspection = context_panels_for_state(state)
+    if not isinstance(state, dict) or not isinstance(state.get("trip"), dict):
+        return default_amap, default_inspection
+
+    amap_text = str(saved_amap or "")
+    inspection_text = str(saved_inspection or "")
+    if state.get("trip_source") == "synthetic_example":
+        if "公开合成示例证据" not in amap_text:
+            amap_text = default_amap
+        if "公开合成示例证据" not in inspection_text:
+            inspection_text = default_inspection
+    else:
+        if not amap_text.startswith("### 🛰️ 当前上传行程"):
+            amap_text = default_amap
+        if not inspection_text.startswith("### ⏱️ 当前上传行程"):
+            inspection_text = default_inspection
+    return amap_text, inspection_text
+
+
+def reset_uploaded_context() -> tuple[dict[str, Any], str, str]:
+    """Clear evidence when a browser selects a new local image."""
+
+    return {}, EMPTY_AMAP_STATUS, EMPTY_INSPECTION_STATUS
+
+
+def run_manual_inspection_for_state(
+    state: dict[str, Any] | None,
+) -> tuple[str, str]:
+    """Inspect only the current trip and never borrow another trip's evidence."""
+
+    if not isinstance(state, dict) or not isinstance(state.get("trip"), dict):
+        raise gr.Error("请先上传行程并构建旅行数字孪生，或载入并构建合成示例。")
+    if state.get("trip_source") == "synthetic_example":
+        amap_panel, inspection_panel = context_panels_for_state(state)
+        _, analysis = analyze_trip(state["trip"], include_cached_amap=True)
+        return (
+            amap_panel,
+            inspection_panel
+            + f"\n- 本次确定性复核：**{analysis.risk_count} 个风险 / "
+            f"{analysis.total_risk_score} 分**",
+        )
+
+    _, analysis = analyze_trip(state["trip"], include_cached_amap=False)
+    return (
+        UPLOADED_AMAP_PENDING,
+        "\n".join(
+            [
+                "### ⏱️ 当前上传行程 · 手动巡检",
+                "",
+                f"- 已重新运行当前 TripGraph 的本地确定性规则：**{analysis.risk_count} 个风险 / {analysis.total_risk_score} 分**",
+                "- 本次未调用高德 MCP 或 Managed Agent；需要实时外部证据的项目保持未核验。",
+                "- 未读取、展示或套用杭州合成示例的巡检记录。",
+            ]
+        ),
     )
 
 
@@ -158,7 +274,10 @@ def check_risks(state: dict[str, Any], confirmed: bool) -> str:
         raise gr.Error("请先构建旅行数字孪生。")
     if state.get("low_confidence_fields") and not confirmed:
         raise gr.Error("请先核对并确认低置信字段。")
-    return risk_markdown(state["trip"])
+    return risk_markdown(
+        state["trip"],
+        include_cached_amap=state.get("trip_source") == "synthetic_example",
+    )
 
 
 def generate_plan_b(state: dict[str, Any], confirmed: bool) -> tuple[str, str]:
@@ -166,7 +285,13 @@ def generate_plan_b(state: dict[str, Any], confirmed: bool) -> tuple[str, str]:
         raise gr.Error("请先构建旅行数字孪生。")
     if state.get("low_confidence_fields") and not confirmed:
         raise gr.Error("请先核对并确认低置信字段。")
-    return plan_b_markdown(state["trip"]), tool_trace_markdown()
+    return (
+        plan_b_markdown(
+            state["trip"],
+            include_cached_amap=state.get("trip_source") == "synthetic_example",
+        ),
+        tool_trace_markdown(),
+    )
 
 
 def answer_question(
@@ -185,7 +310,14 @@ def answer_question(
     conversation = list(history or [])
     conversation.append({"role": "user", "content": text})
     try:
-        answer = answer_with_trip_context(text, chat_context(trip_payload))
+        answer = answer_with_trip_context(
+            text,
+            chat_context(
+                trip_payload,
+                include_cached_amap=state.get("trip_source")
+                == "synthetic_example",
+            ),
+        )
     except Exception:
         answer = "当前模型服务暂时不可用，请稍后重试；TripGraph 和已生成的 Plan B 不受影响。"
     conversation.append({"role": "assistant", "content": answer})
@@ -413,6 +545,9 @@ def _session_snapshot(
     amap_status: str | None,
     inspection_status: str | None,
 ) -> dict[str, Any]:
+    safe_amap, safe_inspection = safe_context_panels(
+        trip_state, amap_status, inspection_status
+    )
     return {
         "trip_state": trip_state if isinstance(trip_state, dict) else {},
         "status": str(status or "等待载入图片。"),
@@ -421,10 +556,8 @@ def _session_snapshot(
         "plan_b": str(plan_b or "### 原方案 / Plan B\n\n等待生成。"),
         "trace": str(trace or "### Agent 工具执行轨迹摘要\n\n等待生成。"),
         "chat_history": list(chat_history or []),
-        "amap_status": str(amap_status or amap_inspection_markdown()),
-        "inspection_status": str(
-            inspection_status or active_inspection_markdown()
-        ),
+        "amap_status": safe_amap,
+        "inspection_status": safe_inspection,
     }
 
 
@@ -440,7 +573,7 @@ def _session_badge(session: dict[str, Any]) -> str:
     return (
         "**当前页面 Session ID：** `"
         + str(session["id"])
-        + "`  \n历史保存在本浏览器；原始上传图片不会持久化。"
+        + "`  \n历史保存在本浏览器；原始上传图片不会写入历史会话。"
     )
 
 
@@ -467,6 +600,11 @@ def _session_view(session: dict[str, Any]) -> tuple[Any, ...]:
         else "尚未解析。"
     )
     timeline = timeline_html(trip) if isinstance(trip, dict) else ""
+    safe_amap, safe_inspection = safe_context_panels(
+        trip_state,
+        snapshot.get("amap_status"),
+        snapshot.get("inspection_status"),
+    )
     return (
         None,
         snapshot.get("status") or "等待载入图片。",
@@ -481,8 +619,8 @@ def _session_view(session: dict[str, Any]) -> tuple[Any, ...]:
         "",
         snapshot.get("chat_history") or [],
         trip_state,
-        snapshot.get("amap_status") or amap_inspection_markdown(),
-        snapshot.get("inspection_status") or active_inspection_markdown(),
+        safe_amap,
+        safe_inspection,
     )
 
 
@@ -638,8 +776,8 @@ def create_app() -> gr.Blocks:
             plan_b = gr.Markdown("### 原方案 / Plan B\n\n等待生成。")
         trace = gr.Markdown("### Agent 工具执行轨迹摘要\n\n等待生成。")
         with gr.Row():
-            amap_status = gr.Markdown(amap_inspection_markdown())
-            inspection_status = gr.Markdown(active_inspection_markdown())
+            amap_status = gr.Markdown(EMPTY_AMAP_STATUS)
+            inspection_status = gr.Markdown(EMPTY_INSPECTION_STATUS)
         inspect_button = gr.Button("⑤ 手动巡检", variant="secondary")
         with gr.Row():
             with gr.Column(scale=1, elem_classes=["guide-card"]):
@@ -715,8 +853,17 @@ def create_app() -> gr.Blocks:
         load_event = load_button.click(
             load_example, outputs=[image, status, state], api_name="load_example"
         )
-        image.upload(lambda: {}, outputs=state, api_name=False)
-        load_event.then(
+        image.upload(
+            reset_uploaded_context,
+            outputs=[state, amap_status, inspection_status],
+            api_name=False,
+        )
+        load_context_event = load_event.then(
+            context_panels_for_state,
+            inputs=state,
+            outputs=[amap_status, inspection_status],
+        )
+        load_context_event.then(
             persist_current_session,
             inputs=session_inputs,
             outputs=session_outputs,
@@ -734,7 +881,12 @@ def create_app() -> gr.Blocks:
             ],
             api_name=False,
         ).then(lambda: "✅ TripGraph 已构建。", outputs=status)
-        build_event.then(
+        build_context_event = build_event.then(
+            context_panels_for_state,
+            inputs=state,
+            outputs=[amap_status, inspection_status],
+        )
+        build_context_event.then(
             persist_current_session,
             inputs=session_inputs,
             outputs=session_outputs,
@@ -770,10 +922,10 @@ def create_app() -> gr.Blocks:
             outputs=session_outputs,
         )
         inspect_event = inspect_button.click(
-            run_cached_manual_inspection,
-            inputs=[trip_json],
+            run_manual_inspection_for_state,
+            inputs=[state],
             outputs=[amap_status, inspection_status],
-            api_name="manual_inspection",
+            api_name=False,
         )
         inspect_event.then(
             persist_current_session,

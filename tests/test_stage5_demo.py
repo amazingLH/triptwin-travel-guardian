@@ -45,6 +45,65 @@ def test_loading_example_marks_chat_as_deterministic() -> None:
     assert state == {"trip_source": "synthetic_example"}
 
 
+def test_blank_session_does_not_show_shared_golden_evidence() -> None:
+    import app
+
+    amap_panel, inspection_panel = app.context_panels_for_state({})
+
+    assert "等待上传行程" in amap_panel
+    assert "等待上传行程" in inspection_panel
+    assert "杭州东站" not in amap_panel
+    assert "drun_" not in inspection_panel
+
+
+def test_synthetic_panels_are_explicitly_shared_public_evidence() -> None:
+    import app
+
+    state = {
+        "trip": load_cached_vision()["trip"],
+        "trip_source": "synthetic_example",
+    }
+    amap_panel, inspection_panel = app.context_panels_for_state(state)
+
+    assert "公开合成示例证据" in amap_panel
+    assert "所有访客共享" in amap_panel
+    assert "杭州东站" in amap_panel
+    assert "公开合成示例证据" in inspection_panel
+
+
+def test_uploaded_trip_never_reuses_golden_cloud_evidence() -> None:
+    import app
+
+    state = {
+        "trip": load_cached_vision()["trip"],
+        "trip_source": "uploaded_image",
+    }
+    amap_panel, inspection_panel = app.run_manual_inspection_for_state(state)
+
+    assert "不会复用杭州合成示例" in amap_panel
+    assert "38.9" not in amap_panel
+    assert "未调用高德 MCP 或 Managed Agent" in inspection_panel
+    assert "drun_" not in inspection_panel
+
+
+def test_legacy_blank_history_is_sanitized_on_restore() -> None:
+    import app
+
+    session = {
+        "snapshot": {
+            "trip_state": {},
+            "amap_status": "杭州东站 → 西湖少年宫码头",
+            "inspection_status": "drun_old_shared_record",
+        }
+    }
+    restored = app._session_view(session)
+
+    assert "等待上传行程" in restored[-2]
+    assert "杭州东站" not in restored[-2]
+    assert "等待上传行程" in restored[-1]
+    assert "drun_" not in restored[-1]
+
+
 def test_golden_demo_is_repeatable_three_times() -> None:
     runs = [run_golden_demo() for _ in range(3)]
     assert runs[0] == runs[1] == runs[2]

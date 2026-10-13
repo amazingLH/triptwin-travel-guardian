@@ -38,9 +38,11 @@ def load_cached_vision() -> dict[str, Any]:
     return load_json(VISION_EVIDENCE_PATH)
 
 
-def analyze_trip(trip_payload: dict[str, Any]) -> tuple[Trip, Any]:
+def analyze_trip(
+    trip_payload: dict[str, Any], *, include_cached_amap: bool = True
+) -> tuple[Trip, Any]:
     completed = copy.deepcopy(trip_payload)
-    if AMAP_INSPECTION_PATH.is_file():
+    if include_cached_amap and AMAP_INSPECTION_PATH.is_file():
         inspection = AmapInspection.model_validate(load_json(AMAP_INSPECTION_PATH))
         completed = apply_amap_evidence(completed, inspection)
     events = completed.get("events", [])
@@ -63,8 +65,12 @@ def analyze_trip(trip_payload: dict[str, Any]) -> tuple[Trip, Any]:
     return trip, RiskEngine().analyze(trip)
 
 
-def validate_plan_b(trip_payload: dict[str, Any]) -> Any:
-    trip, analysis = analyze_trip(trip_payload)
+def validate_plan_b(
+    trip_payload: dict[str, Any], *, include_cached_amap: bool = True
+) -> Any:
+    trip, analysis = analyze_trip(
+        trip_payload, include_cached_amap=include_cached_amap
+    )
     return validate_candidate_artifact(trip, analysis, load_json(CANDIDATES_PATH))
 
 
@@ -85,8 +91,12 @@ def timeline_html(trip_payload: dict[str, Any]) -> str:
     return "<div class='timeline'>" + "".join(items) + "</div>"
 
 
-def risk_markdown(trip_payload: dict[str, Any]) -> str:
-    _, analysis = analyze_trip(trip_payload)
+def risk_markdown(
+    trip_payload: dict[str, Any], *, include_cached_amap: bool = True
+) -> str:
+    _, analysis = analyze_trip(
+        trip_payload, include_cached_amap=include_cached_amap
+    )
     labels = {
         "time_connection": "时间",
         "date_consistency": "日期",
@@ -110,8 +120,12 @@ def risk_markdown(trip_payload: dict[str, Any]) -> str:
     return "\n\n".join(lines)
 
 
-def plan_b_markdown(trip_payload: dict[str, Any]) -> str:
-    trip, analysis = analyze_trip(trip_payload)
+def plan_b_markdown(
+    trip_payload: dict[str, Any], *, include_cached_amap: bool = True
+) -> str:
+    trip, analysis = analyze_trip(
+        trip_payload, include_cached_amap=include_cached_amap
+    )
     validation = validate_candidate_artifact(
         trip, analysis, load_json(CANDIDATES_PATH)
     )
@@ -259,8 +273,12 @@ def run_golden_demo() -> dict[str, Any]:
     }
 
 
-def chat_context(trip_payload: dict[str, Any]) -> dict[str, Any]:
-    trip, analysis = analyze_trip(trip_payload)
+def chat_context(
+    trip_payload: dict[str, Any], *, include_cached_amap: bool = True
+) -> dict[str, Any]:
+    trip, analysis = analyze_trip(
+        trip_payload, include_cached_amap=include_cached_amap
+    )
     validation = validate_candidate_artifact(
         trip, analysis, load_json(CANDIDATES_PATH)
     )
@@ -299,9 +317,11 @@ def chat_context(trip_payload: dict[str, Any]) -> dict[str, Any]:
                 load_json(CANDIDATES_PATH).get("flyai_commands", [])
             ),
             "source": "official FlyAI Skill",
-            "amap": load_json(AMAP_INSPECTION_PATH)
-            if AMAP_INSPECTION_PATH.is_file()
-            else {"status": "unavailable"},
+            "amap": (
+                load_json(AMAP_INSPECTION_PATH)
+                if include_cached_amap and AMAP_INSPECTION_PATH.is_file()
+                else {"status": "not_run_for_current_trip"}
+            ),
         },
         "service_boundary": "只分析与推荐，不代订、不支付；价格库存以下单页为准。",
     }
