@@ -132,7 +132,8 @@ def extract_trip_from_images(
             except (ValueError, KeyError, TypeError) as exc:
                 if attempt == 1:
                     raise ValueError(
-                        "视觉模型连续两次未返回有效 TripGraph，请改用更清晰的截图。"
+                        "视觉模型连续两次未返回符合结构要求的行程，未生成结果。"
+                        "请检查视觉模型配置，或裁剪到订单主要内容后重试。"
                     ) from exc
                 payload["messages"].extend(
                     [
@@ -304,6 +305,12 @@ def _normalize_extraction(payload: dict[str, Any]) -> dict[str, Any]:
             if event.pop("is_protected", False):
                 metadata["booking_status"] = "protected"
             event["metadata"] = metadata
+            if metadata.get("booking_status") in {"refunded", "cancelled", "已退票", "已取消"}:
+                if isinstance(constraints, dict):
+                    constraints["protected_event_ids"] = [
+                        value for value in constraints.get("protected_event_ids", [])
+                        if value != event.get("id")
+                    ]
             if isinstance(event.get("id"), str):
                 previous_event_id = event["id"]
     return normalized
@@ -346,6 +353,15 @@ def _parse_json_object(value: Any) -> dict[str, Any]:
 
 _EXTRACTION_PROMPT = """
 你是 TripTwin 的行程单结构化解析器。用户可能上传同一行程的多张截图；请按时间合并、去重，但不得跨图猜测。只依据图片中明确可见的信息，输出一个 JSON 对象，禁止 Markdown、解释或代码围栏。
+支持原始 12306 火车票订单、机票、酒店订单、聊天行程和完整行程单，不要求固定模板。
+单张车票仅生成一条 transport 事件，不得补造酒店、景点、预算、返程或其他乘客。
+订单日期与广告日期不是出发日期；酒店促销、推荐入住日期等广告不得转成已预订行程。
+车票明确显示“已退票/已取消”时，将 metadata.booking_status 设置为 refunded/cancelled，不能加入 protected_event_ids。
+不得输出乘客姓名、订单号、业务流水号、座位号等身份或订单标识。车次可保留在标题中。
+没有总预算时 constraints.budget_cny=null；其他约束使用应用默认值并在 notes 说明其为默认设置。
+只有成人票时 adults=1，不把“查看剩余乘客”推断为具体人数；缺失信息在 notes 中说明。
+没有事件 ID 时自行生成 train-1 等合法小写 ID；version 必须是 1.0，不是 1.0.0。
+交通起止时间根据出发日期和到达时间生成；明确跨日则使用对应日期。trip 起止取实际事件范围。
 
 根节点必须且只能有：trip、field_confidence、low_confidence_fields、notes。
 trip 必须满足：
@@ -357,10 +373,10 @@ trip 必须满足：
 6. travelers 必须是对象，字段名为 adults、children、seniors、mobility_limitations。
 7. constraints 字段必须使用 budget_cny、max_plan_b_extra_cost_cny、minimum_connection_buffer_minutes、max_daily_walk_minutes、max_daily_activities、max_transfers_per_leg、protected_event_ids、preferences、avoidances。
 8. 每个地点必须是 {"name":"地点名","city":"城市名"}；交通使用 origin 和 destination，其他事件使用 location。
-9. 每个事件保留图片中的 id、event_type、title、start、end、cost_cny、walking_minutes、transfer_count、depends_on、transfer_from_event_id、travel_minutes_from_previous、proposed_extra_cost_cny、confidence、metadata；没有显示的可选字段可省略。
+9. 每个事件使用 id、event_type、title、start、end、cost_cny、walking_minutes、transfer_count、depends_on、transfer_from_event_id、travel_minutes_from_previous、proposed_extra_cost_cny、confidence、metadata；没有显示的可选字段可省略。
 10. risks 固定输出空数组，风险由本地规则引擎计算。
 
 field_confidence 是“字段路径: 0到1数值”的对象，至少覆盖行程起止、预算及每个事件的 title/start/end/cost_cny。
 low_confidence_fields 列出置信度低于 0.8 的字段路径；没有则输出空数组。
 notes 只记录图片缺失或模糊信息；不要输出任何身份证、手机号、票号或密钥。
-""".strip()
+""".strip() + "\n完整结构定义（严格遵守）：\n" + json.dumps(VisionExtraction.model_json_schema(), ensure_ascii=False)

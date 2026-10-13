@@ -40,6 +40,16 @@ class RiskEngine:
 
         risks.extend(self._connection_risks(trip, event_by_id))
         risks.extend(self._schedule_risks(trip, event_by_id))
+        for event in trip.events:
+            if event.metadata.get("booking_status") in {"refunded", "cancelled", "已退票", "已取消"}:
+                risks.append(Risk(
+                    id=f"booking:{event.id}", risk_type=RiskType.SCHEDULE,
+                    severity=RiskSeverity.HIGH, score=80,
+                    title="订单已退票或取消，不能作为有效出行凭证",
+                    description="截图记录的是已失效订单，请确认有效车票后再规划出行。",
+                    affected_event_ids=[event.id], evidence=["订单状态=" + str(event.metadata["booking_status"])],
+                    recommendation="上传当前有效订单；不要据此安排乘车或后续衔接。",
+                ))
         risks.extend(self._date_risks(trip))
         budget, budget_risks, warnings = self._budget_analysis(trip)
         risks.extend(budget_risks)
@@ -259,11 +269,11 @@ class RiskEngine:
         unknown_ids = [event.id for event in trip.events if event.cost_cny is None]
         projected = known_cost + extra_cost
 
-        exceeds_total = projected > trip.constraints.budget_cny
+        exceeds_total = trip.constraints.budget_cny is not None and projected > trip.constraints.budget_cny
         exceeds_extra = extra_cost > trip.constraints.max_plan_b_extra_cost_cny
         if exceeds_total or exceeds_extra:
             status = BudgetStatus.EXCEEDED
-        elif unknown_ids:
+        elif unknown_ids or trip.constraints.budget_cny is None:
             status = BudgetStatus.INDETERMINATE
         else:
             status = BudgetStatus.WITHIN_BUDGET
@@ -279,6 +289,8 @@ class RiskEngine:
         )
 
         warnings: list[str] = []
+        if trip.constraints.budget_cny is None:
+            warnings.append("未提供总预算，仅汇总已知价格；总预算是否超限保持未核验。")
         if unknown_ids:
             warnings.append(
                 "以下事件价格未知，预算结论不能把 null 当作 0："

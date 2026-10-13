@@ -71,7 +71,7 @@ class TravelerProfile(BaseModel):
 class TripConstraints(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    budget_cny: Decimal = Field(gt=0)
+    budget_cny: Decimal | None = Field(default=None, gt=0)
     max_plan_b_extra_cost_cny: Decimal = Field(default=Decimal("500"), ge=0)
     minimum_connection_buffer_minutes: int = Field(default=20, ge=0)
     max_daily_walk_minutes: int = Field(default=60, ge=0)
@@ -141,7 +141,7 @@ class BudgetSummary(BaseModel):
     known_cost_cny: Decimal = Field(ge=0)
     proposed_extra_cost_cny: Decimal = Field(ge=0)
     projected_known_total_cny: Decimal = Field(ge=0)
-    budget_limit_cny: Decimal = Field(gt=0)
+    budget_limit_cny: Decimal | None = Field(default=None, gt=0)
     plan_b_extra_limit_cny: Decimal = Field(ge=0)
     unknown_cost_event_ids: list[str] = Field(default_factory=list)
     status: BudgetStatus

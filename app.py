@@ -214,6 +214,17 @@ def reset_uploaded_context() -> tuple[dict[str, Any], str, str, bool]:
     return {}, EMPTY_AMAP_STATUS, EMPTY_INSPECTION_STATUS, False
 
 
+def reset_import_view() -> tuple[Any, ...]:
+    """Invalidate every previous result before processing a different upload."""
+    return (
+        {}, EMPTY_AMAP_STATUS, EMPTY_INSPECTION_STATUS, False,
+        "已更换图片，请点击第 2 步重新构建。旧行程结果已清空。",
+        "", [], "等待解析新图片。", "", False,
+        "### 风险卡片\n\n等待检查。", "### 原方案 / Plan B\n\n等待生成。",
+        "### Agent 工具执行轨迹摘要\n\n等待生成。", "", [], None,
+    )
+
+
 def run_manual_inspection_for_state(
     state: dict[str, Any] | None,
 ) -> tuple[str, str]:
@@ -313,6 +324,8 @@ def build_twin(image_paths: Any) -> tuple[str, list[list[Any]], str, str, dict[s
         ),
     }
     state["parse_summary"] = f"`{model}` · {request_note}"
+    if not _is_sample_upload(paths) and extraction.notes:
+        low_text += "\n\n" + "\n".join("- " + note for note in extraction.notes)
     return (
         json.dumps(trip_payload, ensure_ascii=False, indent=2),
         rows,
@@ -362,12 +375,27 @@ def build_twin_guarded(
         global_reserved = True
     try:
         result = build_twin(paths)
-    except Exception:
+    except Exception as exc:
         if global_reserved:
             release_reservation("global", "all", "images")
         if client_reserved:
             release_reservation("client", client_key, "images")
-        raise
+        if isinstance(exc, gr.Error):
+            raise
+        import httpx
+        if isinstance(exc, httpx.HTTPStatusError):
+            code = exc.response.status_code
+            message = (
+                "图片解析服务拒绝了请求。请检查创空间的视觉模型名称、调用权限及账户余额/额度。"
+                f"（HTTP {code}）这不是图片格式错误；本次解析额度已退还。"
+            )
+        elif isinstance(exc, httpx.TimeoutException):
+            message = "图片解析超时，请稍后重试；本次解析额度已退还。"
+        elif isinstance(exc, ValueError):
+            message = "图片解析未完成：" + str(exc)[:400] + " 本次解析额度已退还。"
+        else:
+            message = "图片解析服务异常，请查看创空间运行日志；本次解析额度已退还。"
+        raise gr.Error(message) from None
     if not _is_sample_upload(paths):
         store["usage"] = consume_browser(usage, "images")
     return *result, store
@@ -1105,6 +1133,13 @@ def create_app() -> gr.Blocks:
             privacy_confirmed = gr.Checkbox(
                 label="自行上传前，我已遮挡身份证号、手机号和票号（合成示例无需勾选）"
             )
+            gr.Markdown("支持 12306 车票、机票、酒店订单或完整行程截图，**无需固定模板**。单张车票只解析该段交通；请裁掉广告并遮挡姓名、订单号、流水号等信息。")
+            with gr.Accordion("行程格式示例 · 点击图片可放大（仅供参考）", open=False):
+                gr.Gallery(
+                    value=[(str(SAMPLE_IMAGE_PATH), "合成完整行程示例；普通订单截图同样支持")],
+                    columns=1, height=260, object_fit="contain", interactive=False,
+                    allow_preview=True, show_label=False,
+                )
         with gr.Column(elem_id="step-build", elem_classes=["step-card"]):
             gr.HTML("<div class='step-heading'><span class='step-number'>2</span><div><h2>构建与校对行程</h2><p>点击构建后查看时间线；如需修正，展开校对区域。确认后继续第 3 步。</p></div></div>")
             build_button = gr.Button("② 构建旅行数字孪生", variant="primary")
@@ -1222,11 +1257,17 @@ def create_app() -> gr.Blocks:
         load_event = load_button.click(
             load_example, outputs=[image, status, state], api_name="load_example"
         )
+        import_outputs = [
+            state, amap_status, inspection_status, privacy_confirmed, status,
+            trip_json, confidence, low_confidence, timeline, confirmed,
+            risks, plan_b, trace, question, chatbot, export_files,
+        ]
         image.upload(
-            reset_uploaded_context,
-            outputs=[state, amap_status, inspection_status, privacy_confirmed],
+            reset_import_view,
+            outputs=import_outputs,
             api_name=False,
-        )
+        ).then(persist_current_session, inputs=session_inputs, outputs=session_outputs)
+        image.clear(reset_import_view, outputs=import_outputs, api_name=False)
         load_context_event = load_event.then(
             context_panels_for_state,
             inputs=state,
