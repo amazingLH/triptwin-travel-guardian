@@ -102,7 +102,7 @@ def test_public_chat_reuses_browser_cache_without_second_model_call(monkeypatch)
     assert repeated_history[-1]["content"] == history[-1]["content"]
 
 
-def test_synthetic_common_question_uses_local_answer_without_quota(monkeypatch) -> None:
+def test_synthetic_common_question_uses_browser_quota_but_not_model(monkeypatch) -> None:
     import app
 
     monkeypatch.setattr(
@@ -125,7 +125,13 @@ def test_synthetic_common_question_uses_local_answer_without_quota(monkeypatch) 
     )
 
     assert "不会替你预订" in history[-1]["content"]
-    assert store.get("usage", {}).get("questions", 0) == 0
+    assert store.get("usage", {}).get("questions", 0) == 1
+
+    _, repeated_history, repeated_store = app.answer_question_guarded(
+        " 是否会自动预定？ ", history, state, store
+    )
+    assert repeated_history[-1]["content"] == history[-1]["content"]
+    assert repeated_store["usage"]["questions"] == 1
 
 
 def test_uploaded_trip_common_question_still_uses_model(monkeypatch) -> None:
@@ -169,5 +175,5 @@ def test_public_chat_stops_after_browser_daily_limit(monkeypatch) -> None:
         "还能继续问吗？", [], {"trip": load_cached_vision()["trip"]}, store
     )
 
-    assert "每天最多 3 次自由问答" in history[-1]["content"]
+    assert "每天最多 3 次提问" in history[-1]["content"]
     assert returned_store["usage"]["questions"] == 3

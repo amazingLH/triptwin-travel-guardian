@@ -208,19 +208,10 @@ def answer_question_guarded(
     )
     store, _ = ensure_active_session(browser_store)
 
-    # The bundled golden case is fixed and fully verified.  Answer its common
-    # showcase questions locally so they are instant and consume no model quota.
+    # The bundled golden case is fixed and fully verified. Its common showcase
+    # answers are local, but their first use still counts toward the browser's
+    # daily question allowance. Exact repeats continue to reuse the cache.
     deterministic_answer = _synthetic_example_answer(text, state)
-    if deterministic_answer is not None:
-        conversation = list(history or [])
-        conversation.extend(
-            [
-                {"role": "user", "content": text},
-                {"role": "assistant", "content": deterministic_answer},
-            ]
-        )
-        return "", conversation, store
-
     cache_key = _answer_cache_key(text, trip_payload)
     cached = store.get("answer_cache", {}).get(cache_key)
     if isinstance(cached, str) and cached.strip():
@@ -238,15 +229,30 @@ def answer_question_guarded(
         return _quota_answer(
             text,
             history,
-            f"每个浏览器每天最多 {browser_limits()['questions']} 次自由问答",
+            f"每个浏览器每天最多 {browser_limits()['questions']} 次提问",
             store,
         )
+
+    if deterministic_answer is not None:
+        conversation = list(history or [])
+        conversation.extend(
+            [
+                {"role": "user", "content": text},
+                {"role": "assistant", "content": deterministic_answer},
+            ]
+        )
+        store["usage"] = consume_browser(usage, "questions")
+        cache = dict(store.get("answer_cache") or {})
+        cache[cache_key] = deterministic_answer
+        store["answer_cache"] = dict(list(cache.items())[-50:])
+        return "", conversation, store
+
     globally_allowed, _, global_limit = reserve_global("questions")
     if not globally_allowed:
         return _quota_answer(
             text,
             history,
-            f"今日全站自由问答已达到 {global_limit} 次",
+            f"今日全站大模型问答已达到 {global_limit} 次",
             store,
         )
 
@@ -529,9 +535,9 @@ def create_app() -> gr.Blocks:
         gr.HTML("<div class='hero'><h1>TripTwin 旅行数字孪生守护者</h1><p>把行程截图变成 TripGraph，结合真实 FlyAI 与高德 MCP 证据发现衔接、日期、预算、天气和体力风险，并生成可验证 Plan B。</p></div>")
         gr.HTML(
             "<div class='quota-card'><b>使用额度说明：</b>腰包扁扁，费用有限。"
-            f"每个浏览器每天最多 {browser_limits()['questions']} 次自由问答、"
+            f"每个浏览器每天最多 {browser_limits()['questions']} 次提问、"
             f"{browser_limits()['images']} 次自行上传图片解析；"
-            f"全站每天最多 {global_limits()['questions']} 次自由问答、"
+            f"全站每天最多 {global_limits()['questions']} 次大模型问答、"
             f"{global_limits()['images']} 次图片解析。重复问题会复用缓存。"
             "达到限制后，合成示例、风险检查和 Plan B 仍可正常体验。</div>"
         )
