@@ -44,6 +44,7 @@ from triptwin.session_history import (
 )
 from triptwin.runtime_agent import run_live_trip
 from triptwin.exporter import export_trip_files
+from triptwin.input_completion import completion_rows, cancelled_orders, confirm_draft
 from triptwin.vision_parser import extract_trip_from_images
 from triptwin.usage_guard import (
     browser_can_consume,
@@ -302,7 +303,10 @@ def build_twin(image_paths: Any) -> tuple[str, list[list[Any]], str, str, dict[s
         request_note = f"复用已验真的云端解析证据 · 字段准确率 {accuracy}"
     else:
         extraction, metadata = extract_trip_from_images(paths)
-        trip_payload = extraction.trip.model_dump(mode="json")
+        trip_payload = (
+            extraction.trip.model_dump(mode="json")
+            if hasattr(extraction.trip, "model_dump") else extraction.trip
+        )
         confidence = extraction.field_confidence
         low_fields = extraction.low_confidence_fields
         model = metadata["model"]
@@ -324,13 +328,16 @@ def build_twin(image_paths: Any) -> tuple[str, list[list[Any]], str, str, dict[s
         ),
     }
     state["parse_summary"] = f"`{model}` · {request_note}"
+    if not _is_sample_upload(paths):
+        state["draft_trip"] = state.pop("trip")
+        state["stage"] = "needs_confirmation"
     if not _is_sample_upload(paths) and extraction.notes:
         low_text += "\n\n" + "\n".join("- " + note for note in extraction.notes)
     return (
         json.dumps(trip_payload, ensure_ascii=False, indent=2),
         rows,
         low_text,
-        timeline_html(trip_payload),
+        timeline_html(trip_payload) if _is_sample_upload(paths) else "",
         state,
     )
 
@@ -401,6 +408,48 @@ def build_twin_guarded(
     return *result, store
 
 
+def completion_panel(state):
+    draft = (state or {}).get("draft_trip")
+    if not isinstance(draft, dict):
+        return gr.update(visible=False), [], ""
+    invalid = cancelled_orders(draft)
+    message = (
+        "### ⚠️ 订单已失效\n\n" + "、".join(invalid) +
+        " 已退票或取消，无法据此构建有效出行计划。请点击“清空已导入行程”，上传当前有效订单。"
+        if invalid else
+        "### 请补全并确认必要信息\n\n只编辑表格的“填写值”列。空白项为图片未提供的信息；预填规则和人数也请核对。"
+        "填写后点击“确认信息并构建旅行数字孪生”。也可清空并重新上传更详细的行程截图。"
+    )
+    return gr.update(visible=True), (state or {}).get("completion_rows") or completion_rows(draft), message
+
+
+def confirm_import(rows, state):
+    current = dict(state or {})
+    if not isinstance(current.get("draft_trip"), dict):
+        raise gr.Error("请先解析行程截图。")
+    try:
+        trip = confirm_draft(current["draft_trip"], rows)
+    except Exception as exc:
+        current["completion_rows"] = rows
+        return "⚠️ 尚未构建：" + str(exc)[:700], "", current, "", False
+    current["trip"] = trip.model_dump(mode="json")
+    current.pop("draft_trip", None)
+    current.pop("completion_rows", None)
+    current["stage"] = "ready"
+    current["low_confidence_fields"] = []
+    return (
+        "✅ 信息已补全并确认，旅行数字孪生已构建；可以继续第 3 步检查风险。",
+        timeline_html(current["trip"]), current, trip.model_dump_json(indent=2), True,
+    )
+
+
+def import_preview(files):
+    paths = _image_paths(files)
+    return gr.update(value=[(str(path), f"行程截图 {index + 1}") for index, path in enumerate(paths)],
+                     columns=1 if len(paths) <= 1 else 2 if len(paths) <= 4 else 3,
+                     height=340 if len(paths) == 1 else 280, visible=bool(paths))
+
+
 def _anonymous_client_key(request: gr.Request | None) -> str:
     if request is None:
         return ""
@@ -429,14 +478,17 @@ def apply_tripgraph_edits(
         raise gr.Error(f"TripGraph 修改未通过校验：{exc}") from None
     updated = dict(state or {})
     updated["trip"] = trip.model_dump(mode="json")
+    needs_confirmation = updated.get("trip_source") != "synthetic_example"
+    if needs_confirmation:
+        updated["draft_trip"] = updated.pop("trip")
     updated["trip_source"] = "user_corrected"
     updated.pop("live_candidate_artifact", None)
     updated.pop("live_inspection", None)
     return (
         trip.model_dump_json(indent=2),
-        timeline_html(updated["trip"]),
+        "" if needs_confirmation else timeline_html(updated["trip"]),
         updated,
-        "✅ 修改已通过类型、引用与依赖环校验；请重新检查风险。",
+        "✅ 修改已校验，请补全并确认参数后重新构建。" if needs_confirmation else "✅ 修改已通过校验；请重新检查风险。",
         False,
     )
 
@@ -935,6 +987,7 @@ def _session_view(session: dict[str, Any]) -> tuple[Any, ...]:
     if not isinstance(trip_state, dict):
         trip_state = {}
     trip = trip_state.get("trip")
+    draft = trip_state.get("draft_trip")
     confidence_map = trip_state.get("field_confidence")
     confidence_rows = (
         [[name, round(float(value), 3)] for name, value in sorted(confidence_map.items())]
@@ -960,7 +1013,7 @@ def _session_view(session: dict[str, Any]) -> tuple[Any, ...]:
     return (
         None,
         snapshot.get("status") or "等待载入图片。",
-        json.dumps(trip, ensure_ascii=False, indent=2) if isinstance(trip, dict) else "",
+        json.dumps(trip if isinstance(trip, dict) else draft, ensure_ascii=False, indent=2) if isinstance(trip, dict) or isinstance(draft, dict) else "",
         confidence_rows,
         low_text,
         timeline,
@@ -1129,11 +1182,16 @@ def create_app() -> gr.Blocks:
                     label="① 上传 1–5 张行程截图",
                     scale=3,
                 )
-                load_button = gr.Button("载入合成示例", variant="secondary", scale=1)
+                with gr.Column(scale=2, min_width=260):
+                    load_button = gr.Button("载入合成示例", variant="secondary")
+                    preview = gr.Gallery(value=[], label="已导入截图 · 点击放大", columns=1,
+                                         height=340, object_fit="contain", interactive=False,
+                                         allow_preview=True, visible=False)
+                    clear_import_button = gr.Button("清空已导入行程", variant="secondary")
             privacy_confirmed = gr.Checkbox(
                 label="自行上传前，我已遮挡身份证号、手机号和票号（合成示例无需勾选）"
             )
-            gr.Markdown("支持 12306 车票、机票、酒店订单或完整行程截图，**无需固定模板**。单张车票只解析该段交通；请裁掉广告并遮挡姓名、订单号、流水号等信息。")
+            gr.Markdown("支持 12306 车票、机票、酒店订单或完整行程截图，**无需固定模板**。截图缺少的必要信息会在第 2 步提示手动补充；也可清空后上传更详细的行程截图。请裁掉广告并遮挡姓名、订单号、流水号等信息。")
             with gr.Accordion("行程格式示例 · 点击图片可放大（仅供参考）", open=False):
                 gr.Gallery(
                     value=[(str(SAMPLE_IMAGE_PATH), "合成完整行程示例；普通订单截图同样支持")],
@@ -1141,9 +1199,18 @@ def create_app() -> gr.Blocks:
                     allow_preview=True, show_label=False,
                 )
         with gr.Column(elem_id="step-build", elem_classes=["step-card"]):
-            gr.HTML("<div class='step-heading'><span class='step-number'>2</span><div><h2>构建与校对行程</h2><p>点击构建后查看时间线；如需修正，展开校对区域。确认后继续第 3 步。</p></div></div>")
-            build_button = gr.Button("② 构建旅行数字孪生", variant="primary")
+            gr.HTML("<div class='step-heading'><span class='step-number'>2</span><div><h2>解析、补全与构建</h2><p>先解析截图，再补全并确认必要信息，构建完成后继续第 3 步。合成示例的信息已完整。</p></div></div>")
+            build_button = gr.Button("② 解析行程截图", variant="primary")
             status = gr.Markdown("等待载入图片。")
+            with gr.Column(visible=False) as completion_section:
+                completion_message = gr.Markdown()
+                completion_table = gr.Dataframe(
+                    headers=["参数路径", "需要补充或确认", "填写值"],
+                    datatype=["str", "str", "str"], type="array", interactive=True,
+                    column_count=(3, "fixed"), max_height=350,
+                    label="补充信息 · 只修改填写值列",
+                )
+                confirm_import_button = gr.Button("确认信息并构建旅行数字孪生", variant="primary")
             timeline = gr.HTML(label="TripGraph 时间线")
             with gr.Accordion("校对与修改 · 结构化行程", open=False):
                 trip_json = gr.Code(
@@ -1273,6 +1340,13 @@ def create_app() -> gr.Blocks:
             inputs=state,
             outputs=[amap_status, inspection_status],
         )
+        load_event.then(import_preview, inputs=image, outputs=preview)
+        image.change(import_preview, inputs=image, outputs=preview, api_name=False)
+        clear_import_button.click(lambda: None, outputs=image, api_name=False).then(
+            reset_import_view, outputs=import_outputs,
+        ).then(completion_panel, inputs=state, outputs=[completion_section, completion_table, completion_message]).then(
+            persist_current_session, inputs=session_inputs, outputs=session_outputs,
+        )
         load_context_event.then(
             persist_current_session,
             inputs=session_inputs,
@@ -1291,10 +1365,19 @@ def create_app() -> gr.Blocks:
             ],
             api_name=False,
         ).then(
-            lambda current: "✅ TripGraph 已构建；" + str(current.get("parse_summary", "")),
+            lambda current: (
+                "✅ 截图已解析，等待补全并确认；" if current.get("draft_trip") else "✅ TripGraph 已构建；"
+            ) + str(current.get("parse_summary", "")),
             inputs=[state],
             outputs=status,
         )
+        build_event.then(completion_panel, inputs=state, outputs=[completion_section, completion_table, completion_message])
+        confirm_import_button.click(
+            confirm_import, inputs=[completion_table, state],
+            outputs=[status, timeline, state, trip_json, confirmed], api_name=False,
+        ).then(completion_panel, inputs=state, outputs=[completion_section, completion_table, completion_message]).then(
+            context_panels_for_state, inputs=state, outputs=[amap_status, inspection_status],
+        ).then(persist_current_session, inputs=session_inputs, outputs=session_outputs)
         build_context_event = build_event.then(
             context_panels_for_state,
             inputs=state,
@@ -1320,6 +1403,7 @@ def create_app() -> gr.Blocks:
             inputs=session_inputs,
             outputs=session_outputs,
         )
+        edit_event.then(completion_panel, inputs=state, outputs=[completion_section, completion_table, completion_message])
         export_button.click(
             export_current_trip,
             inputs=[state],
@@ -1423,6 +1507,7 @@ def create_app() -> gr.Blocks:
             outputs=[*session_outputs, *view_outputs],
             api_name=False,
         )
+        state.change(completion_panel, inputs=state, outputs=[completion_section, completion_table, completion_message], api_name=False)
     return demo
 
 

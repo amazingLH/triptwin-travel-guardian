@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from PIL import Image, ImageOps
 
@@ -25,10 +25,24 @@ class VisionExtraction(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    trip: Trip
+    trip: Trip | dict[str, Any]
     field_confidence: dict[str, float] = Field(default_factory=dict)
     low_confidence_fields: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def usable_draft(self):
+        if isinstance(self.trip, dict):
+            try:
+                self.trip = Trip.model_validate(self.trip)
+            except ValueError:
+                pass  # A readable but incomplete extraction proceeds to the human form.
+        if isinstance(self.trip, dict) and (
+            not isinstance(self.trip.get("events"), list) or not self.trip["events"]
+            or not all(isinstance(event, dict) for event in self.trip["events"])
+        ):
+            raise ValueError("未识别到可补全的行程事件，请提供订单主要内容。")
+        return self
 
 
 def extract_trip_from_image(
@@ -358,7 +372,8 @@ _EXTRACTION_PROMPT = """
 订单日期与广告日期不是出发日期；酒店促销、推荐入住日期等广告不得转成已预订行程。
 车票明确显示“已退票/已取消”时，将 metadata.booking_status 设置为 refunded/cancelled，不能加入 protected_event_ids。
 不得输出乘客姓名、订单号、业务流水号、座位号等身份或订单标识。车次可保留在标题中。
-没有总预算时 constraints.budget_cny=null；其他约束使用应用默认值并在 notes 说明其为默认设置。
+没有总预算时 constraints.budget_cny=null；缺失的实际时间、价格、地点或同行人数写 null，交由用户手动补充，不猜测。
+其他规则约束可使用应用默认值并在 notes 说明其为默认设置。即使字段缺失，也返回带 events 的行程草稿。
 只有成人票时 adults=1，不把“查看剩余乘客”推断为具体人数；缺失信息在 notes 中说明。
 没有事件 ID 时自行生成 train-1 等合法小写 ID；version 必须是 1.0，不是 1.0.0。
 交通起止时间根据出发日期和到达时间生成；明确跨日则使用对应日期。trip 起止取实际事件范围。

@@ -2,6 +2,8 @@ from triptwin.models import Trip, BudgetStatus
 from triptwin.risk_engine import RiskEngine
 from triptwin.vision_parser import VisionExtraction, _normalize_extraction
 from triptwin.demo_service import timeline_html
+from triptwin.input_completion import completion_rows, confirm_draft
+import pytest
 
 
 def ticket_payload():
@@ -56,3 +58,58 @@ def test_railway_ticket_timeline_preserves_route_title():
     html = timeline_html(ticket_payload()["trip"])
     assert "G8156" in html
     assert "沈阳北站" in html
+
+
+def valid_order():
+    payload = ticket_payload()["trip"]
+    payload["events"][0]["metadata"] = {"booking_status": "confirmed"}
+    payload["events"][0]["origin"]["city"] = "安图"
+    return payload
+
+
+def test_budget_must_be_filled_before_construction():
+    payload = valid_order()
+    rows = completion_rows(payload)
+    with pytest.raises(ValueError, match="总预算"):
+        confirm_draft(payload, rows)
+    rows[0][2] = "2000"
+    trip = confirm_draft(payload, rows)
+    assert trip.constraints.budget_cny == 2000
+
+
+def test_incomplete_dates_remain_a_draft_until_user_fills_them():
+    payload = valid_order()
+    payload["events"][0]["start"] = None
+    extraction = VisionExtraction.model_validate({"trip": payload})
+    assert isinstance(extraction.trip, dict)
+    rows = completion_rows(payload)
+    rows[0][2] = "2000"
+    with pytest.raises(ValueError):
+        confirm_draft(payload, rows)
+    for row in rows:
+        if row[0] == "events.0.start":
+            row[2] = "2026-10-07T20:16:00+08:00"
+    assert confirm_draft(payload, rows).events[0].start.hour == 20
+
+
+def test_refunded_ticket_blocks_construction_with_specific_message():
+    payload = ticket_payload()["trip"]
+    rows = completion_rows(payload)
+    rows[0][2] = "2000"
+    with pytest.raises(ValueError, match="上传当前有效订单"):
+        confirm_draft(payload, rows)
+
+
+def test_pending_draft_cannot_check_risks_or_export():
+    from app import check_risks, export_current_trip, confirm_import
+    state = {"draft_trip": valid_order(), "trip_source": "uploaded_image"}
+    with pytest.raises(Exception, match="构建旅行数字孪生"):
+        check_risks(state, True)
+    with pytest.raises(Exception, match="构建旅行数字孪生"):
+        export_current_trip(state)
+    rows = completion_rows(state["draft_trip"])
+    rows[0][2] = "2000"
+    status, timeline, ready, _, _ = confirm_import(rows, state)
+    assert "已构建" in status
+    assert "G8156" in timeline
+    assert "trip" in ready and "draft_trip" not in ready
