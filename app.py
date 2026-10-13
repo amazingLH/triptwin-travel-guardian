@@ -93,6 +93,9 @@ APP_CSS = """
 .session-bar {border:1px solid #d9e2f2;border-radius:14px;background:#f8fafc;padding:10px 14px}
 .quota-card {background:#fff7ed;border:1px solid #fdba74;border-radius:14px;padding:12px 16px;color:#7c2d12}
 .quota-card b {color:#9a3412}
+#tripgraph-editor .codemirror-wrapper {height:360px!important;max-height:360px!important;overflow:hidden!important}
+#tripgraph-editor .cm-editor {height:100%!important;max-height:100%!important}
+#tripgraph-editor .cm-scroller {height:100%!important;max-height:100%!important;overflow-y:auto!important}
 """
 
 BROWSER_STATE_SECRET = os.getenv("TRIPTWIN_BROWSER_STATE_SECRET") or secrets.token_urlsafe(32)
@@ -1076,6 +1079,7 @@ def create_app() -> gr.Blocks:
                     interactive=True,
                     lines=14,
                     max_lines=14,
+                    elem_id="tripgraph-editor",
                 )
                 apply_edits_button = gr.Button("应用并校验 TripGraph 修改")
                 export_button = gr.Button("导出 TripGraph JSON 与日历 ICS")
