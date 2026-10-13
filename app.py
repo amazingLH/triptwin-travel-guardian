@@ -203,12 +203,27 @@ def answer_question_guarded(
     text = (question or "").strip()
     if not text:
         raise gr.Error("请先输入问题。")
+    store, _ = ensure_active_session(browser_store)
+    if not _has_question_context(state):
+        conversation = list(history or [])
+        conversation.extend(
+            [
+                {"role": "user", "content": text},
+                {
+                    "role": "assistant",
+                    "content": (
+                        "请先上传行程单并构建旅行数字孪生，"
+                        "或点击“载入合成示例”后再提问。"
+                    ),
+                },
+            ]
+        )
+        return "", conversation, store
     trip_payload = (
         state["trip"]
         if state and isinstance(state.get("trip"), dict)
         else load_cached_vision()["trip"]
     )
-    store, _ = ensure_active_session(browser_store)
 
     # The bundled golden case is fixed and fully verified. The four canonical
     # showcase questions are quota-free; paraphrases still use the browser's
@@ -337,6 +352,14 @@ def _is_free_synthetic_question(
         "是否会自动预定",
         "候选数据来自哪里",
     }
+
+
+def _has_question_context(state: dict[str, Any] | None) -> bool:
+    if not isinstance(state, dict):
+        return False
+    if isinstance(state.get("trip"), dict):
+        return True
+    return state.get("trip_source") == "synthetic_example"
 
 
 def _normalize_showcase_question(question: str) -> str:
@@ -622,7 +645,8 @@ def create_app() -> gr.Blocks:
             with gr.Column(scale=1, elem_classes=["guide-card"]):
                 gr.HTML(
                     "<div class='guide-title-row'><h3>💡 演示操作提示</h3>"
-                    "<span class='example-free-note'>以下四个示例问题不消耗每日提问额度；"
+                    "<span class='example-free-note'>使用“载入合成示例”后，以下四个标准问题"
+                    "不消耗每日提问额度；"
                     "请完整复制到“向 TripTwin 提问”中，以免改写后计入额度。</span></div>"
                 )
                 gr.Markdown(

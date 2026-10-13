@@ -185,12 +185,36 @@ def test_uploaded_trip_common_question_still_uses_model(monkeypatch) -> None:
         "trip_source": "uploaded_image",
     }
 
-    _, history, _ = app.answer_question_guarded(
+    _, history, store = app.answer_question_guarded(
         "是否会自动预定？", [], state, None
     )
 
     assert calls["count"] == 1
     assert history[-1]["content"] == "根据用户上传的当前行程回答。"
+    assert store["usage"]["questions"] == 1
+
+
+def test_question_without_trip_context_returns_local_instruction(monkeypatch) -> None:
+    import app
+
+    monkeypatch.setattr(
+        app,
+        "answer_with_trip_context",
+        lambda *_: (_ for _ in ()).throw(AssertionError("model must not be called")),
+    )
+    monkeypatch.setattr(
+        app,
+        "reserve_global",
+        lambda *_: (_ for _ in ()).throw(AssertionError("quota must not be used")),
+    )
+
+    _, history, store = app.answer_question_guarded(
+        "为什么有风险？", [], {}, None
+    )
+
+    assert "请先上传行程单" in history[-1]["content"]
+    assert "载入合成示例" in history[-1]["content"]
+    assert store.get("usage", {}).get("questions", 0) == 0
 
 
 def test_public_chat_stops_after_browser_daily_limit(monkeypatch) -> None:
