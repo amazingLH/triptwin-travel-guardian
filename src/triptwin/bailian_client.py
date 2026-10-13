@@ -96,7 +96,7 @@ class BailianManagedAgentClient:
                 "environment_variables": {
                     "FLYAI_API_KEY": self.settings.flyai_api_key.get_secret_value()
                 },
-                "metadata": {"project": "triptwin", "trip_id": trip_id},
+                "metadata": {"project": "tuzhengguard", "trip_id": trip_id},
             },
         )
         payload = self._json(response)

@@ -28,7 +28,7 @@ def generate(output: Path = OUTPUT) -> Path:
     draw = ImageDraw.Draw(image)
     navy, blue, muted, white = "#17233C", "#2563EB", "#667085", "#FFFFFF"
     draw.rounded_rectangle((55, 40, 1445, 1140), 30, fill=white, outline="#D9E2F2", width=3)
-    draw.text((105, 80), "TRIPTWIN · 合成行程确认单", font=_font(42, bold=True), fill=navy)
+    draw.text((105, 80), "途证哨 · 合成行程确认单", font=_font(42, bold=True), fill=navy)
     draw.text((105, 140), "仅供比赛演示 · 演示旅客 · 无真实个人信息", font=_font(24), fill=muted)
     draw.rounded_rectangle((1110, 75, 1385, 140), 28, fill="#E8F0FF")
     draw.text((1150, 91), "杭州 2 日行程", font=_font(25, bold=True), fill=blue)

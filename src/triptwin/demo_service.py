@@ -140,7 +140,7 @@ def plan_b_markdown(
         return (
             "### ✅ 当前无需 Plan B\n\n"
             "现有 TripGraph 未触发确定性风险规则。价格、库存和天气仍可能变化，"
-            "出发前请重新核验；TripTwin 不会自动预订或支付。"
+            "出发前请重新核验；途证哨 不会自动预订或支付。"
         )
     artifact = candidate_artifact
     if artifact is None and include_cached_amap:
@@ -149,7 +149,7 @@ def plan_b_markdown(
         return (
             "### Plan B 尚未生成\n\n"
             "当前行程没有专属的实时 FlyAI 候选证据。为避免把公开杭州示例套用到您的行程，"
-            "TripTwin 不会展示静态候选；请执行实时核验后再生成。"
+            "途证哨 不会展示静态候选；请执行实时核验后再生成。"
         )
     validation = validate_candidate_artifact(
         trip, analysis, artifact, require_simulation=require_simulation

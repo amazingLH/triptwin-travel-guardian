@@ -1,4 +1,4 @@
-"""TripTwin production-candidate Gradio application."""
+"""途证哨 production-candidate Gradio application."""
 # ruff: noqa: E402
 
 from __future__ import annotations
@@ -51,6 +51,7 @@ from triptwin.history_media import (
     previews_html, restore_original, sanitize_previews,
 )
 from triptwin.browser_secrets import persistent_secret
+from triptwin.branding import PRODUCT_TITLE
 from triptwin.runtime_agent import run_live_trip
 from triptwin.exporter import export_trip_files
 from triptwin.input_completion import completion_rows, cancelled_orders, confirm_draft, validation_message
@@ -70,7 +71,7 @@ from triptwin.usage_guard import (
 
 DISCLAIMER = (
     "价格、库存及开放时间具有时效性；结果仅用于风险分析与候选推荐。"
-    "TripTwin 不代订、不支付；上传图片前请遮挡身份证号、手机号和票号。"
+    "途证哨 不代订、不支付；上传图片前请遮挡身份证号、手机号和票号。"
     "历史会话按当前浏览器隔离；公开合成示例的证据由所有访客共享，"
     "用户上传行程不会复用该示例结果。"
 )
@@ -741,7 +742,7 @@ def generate_plan_b(
         result = run_live_trip(state["trip"])
     except Exception as exc:
         raise gr.Error(
-            "当前行程实时核验失败，TripTwin 已停止生成，未套用任何示例数据："
+            "当前行程实时核验失败，途证哨 已停止生成，未套用任何示例数据："
             + str(exc)
         ) from None
     updated = dict(state)
@@ -1130,13 +1131,13 @@ def _synthetic_example_answer(
             "第二晚推荐 **如家精选-杭州西湖景区苏堤店**：2026-10-19 入住、"
             "10月20日退房，查询价约 **¥135/晚**，低于 Plan B 的 ¥500 增量上限。"
             "该候选来自 FlyAI 酒店查询，价格和房态请以跳转后的飞猪页面为准；"
-            "TripTwin 不会代订。"
+            "途证哨 不会代订。"
         )
     if "自动" in normalized and any(
         keyword in normalized for keyword in ("预定", "预订", "下单", "支付")
     ):
         return (
-            "不会。TripTwin 只进行风险分析并提供带来源链接的候选，"
+            "不会。途证哨 只进行风险分析并提供带来源链接的候选，"
             "不会替你预订、下单或支付；最终选择和操作始终由你完成。"
         )
     if "候选" in normalized and any(
@@ -1336,10 +1337,11 @@ def _restored_history_view(session: dict[str, Any]) -> tuple[Any, ...]:
     files = []
     expired = []
     for photo in previews:
-        original = restore_original(photo, HISTORY_FILE_SECRET, [Path(gr.utils.get_upload_folder()), PROJECT_ROOT / "assets"])
+        # Public examples follow the current bundled asset after a brand refresh,
+        # so an older Gradio copy does not become a paid user-image parse.
+        original = next((path for path in known_paths if path.name == photo["name"]), None)
         if original is None:
-            # Public examples only: recover exactly known, authorized assets.
-            original = next((path for path in known_paths if path.name == photo["name"]), None)
+            original = restore_original(photo, HISTORY_FILE_SECRET, [Path(gr.utils.get_upload_folder()), PROJECT_ROOT / "assets"])
         if original is None:
             try:
                 original = materialize_preview(photo, Path(gr.utils.get_upload_folder()))
@@ -1485,7 +1487,7 @@ def clear_all_history_sessions(browser_store: Any) -> tuple[Any, ...]:
 
 
 def create_app() -> gr.Blocks:
-    with gr.Blocks(title="TripTwin 旅行数字孪生守护者", delete_cache=(3600, 3600)) as demo:
+    with gr.Blocks(title=PRODUCT_TITLE, delete_cache=(3600, 3600)) as demo:
         state = gr.State({})
         image_previews = gr.State([])
         browser_store = gr.BrowserState(
@@ -1497,7 +1499,7 @@ def create_app() -> gr.Blocks:
         # tab-local server State as the authority between callbacks, then mirror
         # updates to localStorage rather than reading a stale browser snapshot.
         history_store = gr.State({})
-        gr.HTML("<div class='hero'><h1>TripTwin 旅行数字孪生守护者</h1><p>把行程截图变成 TripGraph，结合真实 FlyAI 与高德 MCP 证据发现衔接、日期、预算、天气和体力风险，并生成可验证 Plan B。</p></div>")
+        gr.HTML(f"<div class='hero'><h1>{PRODUCT_TITLE}</h1><p>把行程截图变成 TripGraph，结合真实 FlyAI 与高德 MCP 证据发现衔接、日期、预算、天气和体力风险，并生成可验证 Plan B。</p></div>")
         gr.HTML(
             "<div class='quota-card'><b>使用额度说明：</b>作者腰包扁扁，短期内可承担的费用有限，"
             "后续将逐步增加 AI 使用次数。"
@@ -1610,7 +1612,7 @@ def create_app() -> gr.Blocks:
                     "<div class='guide-title-row'><h3>💡 演示操作提示</h3>"
                     "<span class='example-free-note'>通过“行程功能示例”选择“单行程正常示例”后，以下四个标准问题"
                     "不消耗每日提问额度；"
-                    "请完整复制到“向 TripTwin 提问”中，以免改写后计入额度。</span></div>"
+                    "请完整复制到“向途证哨提问”中，以免改写后计入额度。</span></div>"
                 )
                 gr.Markdown(
                     """完成前面的步骤后，可以提问：
@@ -1621,14 +1623,14 @@ def create_app() -> gr.Blocks:
                 )
             with gr.Column(elem_classes=["chat-panel"]):
                 chatbot = gr.Chatbot(
-                    label="TripTwin 智能回复",
+                    label="途证哨智能回复",
                     layout="bubble",
                     height=300,
                     placeholder="这里会以对话气泡显示基于当前 TripGraph 和 Plan B 的回答。",
                 )
                 with gr.Row():
                     question = gr.Textbox(
-                        label="向 TripTwin 提问",
+                        label="向途证哨提问",
                         placeholder="可自由提问，不限于示例问题",
                         scale=5,
                     )

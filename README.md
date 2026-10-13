@@ -17,11 +17,13 @@ models:
 license: MIT License
 ---
 
-# TripTwin 旅行数字孪生守护者
+# 途证哨 TuzhengGuard · 旅行数字孪生守护者
 
-TripTwin 将零散行程解析为结构化 `TripGraph`，使用确定性规则发现时间、日期、预算、体力和天气风险，再基于飞猪旅行真实候选生成可验证的 Plan B。它只做风险提示与候选推荐，**不会自动预订或支付**。
+“途”是旅行，“证”是可追溯证据，“哨”是风险守护。项目现使用 `TuzhengGuard` 作为对外英文标识；改名范围与兼容说明见 [名称迁移记录](docs/name-migration.md)。
 
-> 当前状态：最终发布候选版；[GitHub 公共仓库](https://github.com/amazingLH/triptwin-travel-guardian)与 [ModelScope 公网 Demo](https://modelscope.cn/studios/L666H666Better/triptwin-travel-guardian)均已发布。
+途证哨 将零散行程解析为结构化 `TripGraph`，使用确定性规则发现时间、日期、预算、体力和天气风险，再基于飞猪旅行真实候选生成可验证的 Plan B。它只做风险提示与候选推荐，**不会自动预订或支付**。
+
+> 当前状态：最终发布候选版；[GitHub 公共仓库](https://github.com/amazingLH/tuzhengguard-travel-guardian)与 [ModelScope 公网 Demo](https://modelscope.cn/studios/L666H666Better/triptwin-travel-guardian)均已发布。
 
 ## 作品亮点
 
@@ -56,6 +58,8 @@ flowchart LR
 LLM 负责理解、编排和解释；TripGraph、风险规则、候选校验与证据文件负责约束结果。
 
 ## 已验证结果
+
+2026-10-13 品牌迁移与历史兼容回归：145 项测试、2 个离线案例、静态检查及编译检查通过；本地浏览器已确认新标题和既有会话恢复。历史键、密钥配置和限流参数未改变。本次未新增付费云端调用；创空间重新部署后再验收公网标题。
 
 2026-10-13 最终审查：125 项测试、2 个离线案例与本地桌面/390px 手机宽度流程通过。完整问题、修复和未验证的线上边界见 [最终检查报告](docs/final-audit-2026-10-13.md)。本次未新增付费云端验收，公网需重新部署后复测。
 

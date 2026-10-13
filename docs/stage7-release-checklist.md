@@ -14,8 +14,8 @@
 
 ## 等待平台操作
 
-- [x] 创建 GitHub Public 仓库 `triptwin-travel-guardian`。
-- [x] 通过暂存区密钥扫描后推送至 `https://github.com/amazingLH/triptwin-travel-guardian`。
+- [x] 创建 GitHub Public 仓库，现名为 `tuzhengguard-travel-guardian`。
+- [x] 通过暂存区密钥扫描后推送至 `https://github.com/amazingLH/tuzhengguard-travel-guardian`。
 - [x] 创建公开 ModelScope 创空间 `L666H666Better/triptwin-travel-guardian`。
 - [x] 合并平台生成的卡片元数据并将完整代码推送至 ModelScope `master` 分支。
 - [x] 在 Secret/密钥区配置必要变量；不得写入公开变量或仓库。

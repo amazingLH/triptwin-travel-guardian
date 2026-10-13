@@ -3,7 +3,7 @@ requires = ["setuptools>=75", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "triptwin"
+name = "tuzhengguard"
 version = "1.0.0"
 description = "Evidence-grounded travel digital twin and guarded replanning agent"
 requires-python = ">=3.11"
@@ -16,6 +16,8 @@ dependencies = [
 ]
 
 [project.scripts]
+tuzhengguard = "triptwin.cli:main"
+# Compatibility alias for existing scripts and deployments.
 triptwin = "triptwin.cli:main"
 
 [tool.setuptools]

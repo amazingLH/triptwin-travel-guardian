@@ -8,6 +8,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from triptwin.models import Trip
+from triptwin.branding import PRODUCT_ID
 
 
 def export_trip_files(trip_payload: dict[str, object], *, directory_root: str | Path | None = None) -> list[str]:
@@ -22,7 +23,7 @@ def export_trip_files(trip_payload: dict[str, object], *, directory_root: str | 
     lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
-        "PRODID:-//TripTwin//Travel Digital Twin//ZH-CN",
+        "PRODID:-//TuzhengGuard//Travel Digital Twin//ZH-CN",
         "CALSCALE:GREGORIAN",
     ]
     export_id = uuid4().hex
@@ -32,13 +33,13 @@ def export_trip_files(trip_payload: dict[str, object], *, directory_root: str | 
         lines.extend(
             [
                 "BEGIN:VEVENT",
-                f"UID:{trip.trip_id}-{event.id}-{export_id}@triptwin",
+                f"UID:{trip.trip_id}-{event.id}-{export_id}@{PRODUCT_ID}",
                 f"DTSTAMP:{timestamp}",
                 f"DTSTART:{event.start.astimezone(UTC).strftime('%Y%m%dT%H%M%SZ')}",
                 f"DTEND:{event.end.astimezone(UTC).strftime('%Y%m%dT%H%M%SZ')}",
                 f"SUMMARY:{_escape(event.title)}",
                 f"LOCATION:{_escape(place.name if place else '')}",
-                "DESCRIPTION:TripTwin 仅分析与提醒，不代表预订或支付。",
+                "DESCRIPTION:途证哨 仅分析与提醒，不代表预订或支付。",
                 "END:VEVENT",
             ]
         )

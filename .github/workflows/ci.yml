@@ -1,4 +1,4 @@
-name: TripTwin CI
+name: TuzhengGuard CI
 
 on:
   push:

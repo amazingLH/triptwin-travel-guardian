@@ -1,4 +1,4 @@
-"""Context-grounded TripTwin question answering through Model Studio."""
+"""Context-grounded 途证哨 question answering through Model Studio."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ def answer_with_trip_context(
             {
                 "role": "system",
                 "content": (
-                    "你是 TripTwin 旅行数字孪生守护者。请用简洁自然的中文回答用户，"
+                    "你是 途证哨 旅行数字孪生守护者。请用简洁自然的中文回答用户，"
                     "必须只依据给定的 TripGraph、确定性风险和已验证 FlyAI 候选。"
                     "不得虚构价格、库存、天气、评分或退改政策；未知就明确说未查询到。"
                     "你可以理解预订/预定等同义表达。绝不能声称已经代订或支付。"

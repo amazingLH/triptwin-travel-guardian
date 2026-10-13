@@ -65,7 +65,7 @@ def main() -> int:
             run = client.wait_for_completion(session_id, timeout_seconds=120)
         else:
             session_id = client.create_session(
-                title=f"TripTwin Stage 4 smoke {trip.trip_id}", trip_id=trip.trip_id
+                title=f"途证哨 Stage 4 smoke {trip.trip_id}", trip_id=trip.trip_id
             )
             LAST_SESSION_PATH.write_text(session_id, encoding="utf-8")
             print(f"[2/3] 百炼会话已创建：{_mask_id(session_id)}")
@@ -153,7 +153,7 @@ def _recover_latest_session(
         session_id = LAST_SESSION_PATH.read_text(encoding="utf-8").strip()
         if session_id:
             return session_id
-    expected_title = f"TripTwin Stage 4 smoke {trip_id}"
+    expected_title = f"途证哨 Stage 4 smoke {trip_id}"
     for session in client.list_sessions():
         if session.get("title") == expected_title and isinstance(session.get("id"), str):
             session_id = str(session["id"])

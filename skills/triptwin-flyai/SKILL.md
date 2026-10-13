@@ -1,7 +1,7 @@
 ---
 name: triptwin-flyai
-display_name: "TripTwin FlyAI — Official FlyAI Adapter"
-description: TripTwin adapter of Alibaba Fliggy's official FlyAI skill for searching flights, trains, hotels, attractions, concerts, and travel deals with real-time tools. Use it for travel search, price comparison, itinerary planning, and Plan B generation; do not invent prices, inventory, or availability when tool results are missing.
+display_name: "途证哨 FlyAI — Official FlyAI Adapter"
+description: 途证哨 adapter of Alibaba Fliggy's official FlyAI skill for searching flights, trains, hotels, attractions, concerts, and travel deals with real-time tools. Use it for travel search, price comparison, itinerary planning, and Plan B generation; do not invent prices, inventory, or availability when tool results are missing.
 homepage: https://open.fly.ai/
 metadata:
   version: 1.0.0
