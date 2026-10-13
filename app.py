@@ -1074,7 +1074,8 @@ def create_app() -> gr.Blocks:
                     language="json",
                     label="结构化 TripGraph（可校对修改）",
                     interactive=True,
-                    lines=18,
+                    lines=14,
+                    max_lines=14,
                 )
                 apply_edits_button = gr.Button("应用并校验 TripGraph 修改")
                 export_button = gr.Button("导出 TripGraph JSON 与日历 ICS")
