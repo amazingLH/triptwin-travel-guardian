@@ -48,6 +48,7 @@ from triptwin.runtime_agent import run_live_trip
 from triptwin.exporter import export_trip_files
 from triptwin.input_completion import completion_rows, cancelled_orders, confirm_draft
 from triptwin.functional_examples import example_kind, example_paths, example_trip, field_description
+from triptwin.local_planner import schedule_options, options_markdown
 from triptwin.vision_parser import extract_trip_from_images
 from triptwin.usage_guard import (
     browser_can_consume,
@@ -196,6 +197,15 @@ def context_panels_for_state(
                 "⏱️ 合成示例 · 主动巡检",
             ),
         )
+    if state.get("trip_source") == "ticket_example":
+        _, analysis = analyze_trip(state["trip"], include_cached_amap=False)
+        return (
+            "### 🛰️ 车票功能示例 · 空间与天气核验\n\n行程已构建。本示例只使用图片里的车站、日期和时刻；没有调用高德 MCP，实时路线及天气保持未核验。",
+            f"### ⏱️ 车票功能示例 · 本地巡检\n\n已对当前行程运行确定性风险规则：{analysis.risk_count} 个风险，{analysis.total_risk_score} 分。\n\n没有发起云端定时巡检。",
+        )
+    if state.get("local_analysis_completed"):
+        _, analysis = analyze_trip(state["trip"], include_cached_amap=False)
+        return UPLOADED_AMAP_PENDING, f"### ⏱️ 当前上传行程 · 本地回放复检\n\n已重新检查当前方案：{analysis.risk_count} 个风险，{analysis.total_risk_score} 分。未调用云端工具或执行实际退改。"
     return UPLOADED_AMAP_PENDING, UPLOADED_INSPECTION_PENDING
 
 
@@ -217,6 +227,8 @@ def safe_context_panels(
             amap_text = default_amap
         if "公开合成示例证据" not in inspection_text:
             inspection_text = default_inspection
+    elif state.get("trip_source") == "ticket_example":
+        return default_amap, default_inspection
     else:
         if not amap_text.startswith("### 🛰️ 当前上传行程"):
             amap_text = default_amap
@@ -318,6 +330,9 @@ def build_twin(image_paths: Any) -> tuple[str, list[list[Any]], str, str, dict[s
         trip_payload = example_trip(kind)
         confidence = {f"events[{i}].{key}": 1.0 for i in range(len(trip_payload["events"])) for key in ("title", "start", "end", "cost_cny")}
         low_fields = []
+        if kind == "conflict":
+            confidence["events[2].title"] = 0.65
+            low_fields = ["第 3 项车次在图片中被遮挡，暂记为“车次待确认”；请核对或确认已知限制"]
         model = "本地人工核对示例"
         request_note = "复用脱敏车票示例，不调用模型；预算与人数为演示设置，工具证据保持未核验"
     elif _is_sample_upload(paths):
@@ -577,17 +592,29 @@ def generate_plan_b(
         raise gr.Error("请先核对并确认低置信字段。")
     if state.get("trip_source") == "ticket_example":
         _, analysis = analyze_trip(state["trip"], include_cached_amap=False)
+        options = schedule_options(state["trip"])
+        updated = dict(state)
+        updated["local_plan_options"] = options
         text = (
-            "### ✅ 正常衔接示例\n\n沈阳 → 大连于 06:50 到达，下一段 09:54 从大连出发，间隔 184 分钟。当前本地规则没有检出风险，无需生成替代方案。"
+            _normal_ticket_plan(state["trip"])
             if analysis.risk_count == 0 else
-            "### ⚠️ 冲突示例的处理建议\n\n大连 → 秦皇岛和大连 → 葫芦岛均为 09:54 出发，无法同时乘坐。请根据真实目的地选择保留其中一段，并移除另一段后重新检查风险。\n\n这是基于现有订单的本地冲突说明，不是实时余票查询；退改需自行确认，不自动操作订单。"
+            options_markdown(state["trip"], options) if options else
+            "### 当前无法自动生成有效的局部调整方案\n\n没有找到满足受保护行程与依赖约束的方案，请补充目的地优先级或查询新的车次。"
         )
-        return text, "### 工具轨迹\n\n本次为脱敏功能示例，未调用高德 MCP 或 FlyAI，不展示杭州工具证据。", state, EMPTY_AMAP_STATUS, EMPTY_INSPECTION_STATUS
+        amap_panel, inspection_panel = context_panels_for_state(updated)
+        return text, "### 本地计划回放轨迹\n\n读取当前行程 → 检查时间冲突 → 保护首段行程 → 枚举局部调整 → 校验依赖与预算 → 重新运行风险规则。\n\n本次未调用高德 MCP 或 FlyAI。", updated, amap_panel, inspection_panel
     if state.get("trip_source") != "synthetic_example":
         _, analysis = analyze_trip(state["trip"], include_cached_amap=False)
         if analysis.risk_count == 0:
             amap_panel, inspection_panel = context_panels_for_state(state)
             return plan_b_markdown(state["trip"], include_cached_amap=False), "当前未检出风险，无需替代候选，本次未调用外部工具。", state, amap_panel, inspection_panel
+        options = schedule_options(state["trip"])
+        if options:
+            updated = dict(state)
+            updated["local_plan_options"] = options
+            updated["local_analysis_completed"] = True
+            amap_panel, inspection_panel = context_panels_for_state(updated)
+            return options_markdown(state["trip"], options), "已基于当前上传行程生成局部调整候选，并重新校验结构、依赖、保护节点、预算和风险。未调用外部工具。", updated, amap_panel, inspection_panel
     if state.get("trip_source") == "synthetic_example":
         amap_panel, inspection_panel = context_panels_for_state(state)
         return (
@@ -668,6 +695,67 @@ def generate_plan_b(
     )
 
 
+def _normal_ticket_plan(payload):
+    from triptwin.models import Trip
+    events = sorted(Trip.model_validate(payload).events, key=lambda event: event.start)
+    lines = ["### ✅ 当前行程本地复检通过", "", "当前本地规则没有检出风险，无需新增替代订单。"]
+    for previous, current in zip(events, events[1:]):
+        minutes = int((current.start - previous.end).total_seconds() // 60)
+        lines.append(f"- {previous.title} → {current.title}：到达与下一次出发间隔 {minutes} 分钟。")
+    lines.append("\n实时交通、天气和余票未查询；这个结论只覆盖当前已知字段及本地规则。")
+    return "\n".join(lines)
+
+
+def local_options_view(state):
+    options = (state or {}).get("local_plan_options") or []
+    return gr.update(visible=bool(options)), gr.update(choices=[(option["label"], option["id"]) for option in options], value=options[0]["id"] if options else None)
+
+
+def apply_local_option(selected, state):
+    if not isinstance((state or {}).get("trip"), dict):
+        raise gr.Error("请先构建行程并生成 Plan B。")
+    # Recompute from current state, never trust a candidate passed back by the UI.
+    options = schedule_options(state["trip"])
+    option = next((item for item in options if item["id"] == selected), None)
+    if option is None:
+        raise gr.Error("方案已失效，请基于当前行程重新生成 Plan B。")
+    updated = dict(state)
+    updated["trip"] = option["trip"]
+    updated["local_plan_options"] = []
+    updated["local_analysis_completed"] = True
+    updated.pop("live_candidate_artifact", None)
+    updated.pop("live_inspection", None)
+    # Remap evidence to retained events instead of showing removed-event rows.
+    import re
+    original_ids = [event["id"] for event in state["trip"]["events"]]
+    retained_indices = {event["id"]: index for index, event in enumerate(option["trip"]["events"])}
+    remapped = {}
+    for key, value in (state.get("field_confidence") or {}).items():
+        match = re.search(r"events\[(\d+)\]", key)
+        if match:
+            old_index = int(match.group(1))
+            if old_index >= len(original_ids) or original_ids[old_index] not in retained_indices:
+                continue
+            key = key.replace(match.group(0), f"events[{retained_indices[original_ids[old_index]]}]")
+        remapped[key] = value
+    updated["field_confidence"] = remapped
+    updated["low_confidence_fields"] = [key for key, value in remapped.items() if float(value) < 0.8]
+    message = "✅ 已应用到页面行程并完成风险复检；没有实际退票、改签或支付。"
+    return (
+        json.dumps(option["trip"], ensure_ascii=False, indent=2), timeline_html(option["trip"]),
+        risk_markdown(option["trip"], include_cached_amap=False), updated,
+        f"### 已应用：{option['label']}\n\n{message}\n\n保留行程票面金额 ¥{option['known_cost']}；本地风险 {option['before_risks']} → {option['after_risks']}。退款和手续费未知。",
+        message, True,
+    )
+
+
+def refresh_confidence(state):
+    values = (state or {}).get("field_confidence") or {}
+    rows = [[key, round(float(value), 3), field_description(key, state.get("trip"))] for key, value in sorted(values.items())]
+    low = (state or {}).get("low_confidence_fields") or []
+    return rows, "已确认仍存在的识别限制：" + "、".join(low) if low else "✅ 当前保留行程没有低于 0.8 的已标注字段。"
+
+
 def generate_plan_b_guarded(
     state: dict[str, Any],
     confirmed: bool,
@@ -679,6 +767,8 @@ def generate_plan_b_guarded(
         result = generate_plan_b(state, confirmed)
         return *result, store
     if isinstance(state.get("trip"), dict) and analyze_trip(state["trip"], include_cached_amap=False)[1].risk_count == 0:
+        return *generate_plan_b(state, confirmed), store
+    if isinstance(state.get("trip"), dict) and schedule_options(state["trip"]):
         return *generate_plan_b(state, confirmed), store
     if isinstance(state.get("live_candidate_artifact"), dict):
         result = generate_plan_b(state, confirmed)
@@ -1274,6 +1364,7 @@ def create_app() -> gr.Blocks:
                 )
                 apply_edits_button = gr.Button("应用并校验 TripGraph 修改")
             with gr.Accordion("查看字段识别置信度", open=False):
+                gr.Markdown("**识别置信度表示字段读得是否可靠，不表示行程是否合理。** 时间读准了仍可能冲突，请看第 3 步风险检查。车票示例的 1 表示人工核对清晰可见字段；被遮挡或缺失的字段会降低置信度。")
                 confidence = gr.Dataframe(
                     headers=["字段", "置信度", "备注说明"],
                     datatype=["str", "number", "str"],
@@ -1293,6 +1384,9 @@ def create_app() -> gr.Blocks:
             gr.HTML("<div class='step-heading'><span class='step-number'>4</span><div><h2>生成 Plan B</h2><p>基于当前行程生成替代方案。自行上传的行程会执行实时工具核验。</p></div></div>")
             plan_button = gr.Button("④ 生成 Plan B", variant="primary")
             plan_b = gr.Markdown("### 原方案 / Plan B\n\n等待生成。")
+            with gr.Column(visible=False) as local_options_section:
+                local_choice = gr.Dropdown(choices=[], label="选择保留的行程方案", interactive=True)
+                apply_local_button = gr.Button("应用到当前行程 · 不执行实际退改", variant="primary")
             with gr.Accordion("查看工具证据与实时巡检", open=False):
                 inspect_button = gr.Button("查看 / 执行实时巡检", variant="secondary")
                 amap_status = gr.Markdown(EMPTY_AMAP_STATUS)
@@ -1510,6 +1604,15 @@ def create_app() -> gr.Blocks:
             inputs=session_inputs,
             outputs=session_outputs,
         )
+        plan_event.then(local_options_view, inputs=state, outputs=[local_options_section, local_choice])
+        apply_local_button.click(
+            apply_local_option, inputs=[local_choice, state],
+            outputs=[trip_json, timeline, risks, state, plan_b, status, confirmed], api_name=False,
+        ).then(refresh_confidence, inputs=state, outputs=[confidence, low_confidence]).then(
+            context_panels_for_state, inputs=state, outputs=[amap_status, inspection_status],
+        ).then(
+            persist_current_session, inputs=session_inputs, outputs=session_outputs,
+        )
         inspect_event = inspect_button.click(
             run_live_inspection_guarded,
             inputs=[state, confirmed, browser_store],
@@ -1573,6 +1676,7 @@ def create_app() -> gr.Blocks:
             api_name=False,
         )
         state.change(completion_panel, inputs=state, outputs=[completion_section, completion_table, completion_message], api_name=False)
+        state.change(local_options_view, inputs=state, outputs=[local_options_section, local_choice], api_name=False)
         state.change(
             lambda current: gr.update(visible=isinstance((current or {}).get("trip"), dict)),
             inputs=state, outputs=editor_section, api_name=False,
