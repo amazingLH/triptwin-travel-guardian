@@ -42,6 +42,7 @@ def test_user_question_is_encoded_as_untrusted_data(monkeypatch) -> None:
     )
 
     assert answer == "不能泄露密钥。"
+    assert observed["model"] == "qwen3.7-flash"
     system_text = observed["messages"][0]["content"]
     user_payload = json.loads(observed["messages"][1]["content"].split("：\n", 1)[1])
     assert "不可信用户输入" in system_text

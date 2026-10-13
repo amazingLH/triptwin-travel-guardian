@@ -32,7 +32,7 @@ def extract_trip_from_image(
     image_path: str | Path,
     *,
     settings: Settings | None = None,
-    model: str = "qwen3.8-flash",
+    model: str | None = None,
     timeout_seconds: float = 120,
 ) -> tuple[VisionExtraction, dict[str, Any]]:
     """Read an itinerary image with Qwen and return a validated TripGraph."""
@@ -41,6 +41,7 @@ def extract_trip_from_image(
     if not path.is_file():
         raise FileNotFoundError(f"未找到行程图片：{path}")
     resolved_settings = settings or Settings.from_env()
+    resolved_model = model or resolved_settings.dashscope_vision_model
     mime_type = mimetypes.guess_type(path.name)[0] or "image/png"
     data_url = (
         f"data:{mime_type};base64,"
@@ -51,7 +52,7 @@ def extract_trip_from_image(
         "/compatible-mode/v1/chat/completions"
     )
     payload = {
-        "model": model,
+        "model": resolved_model,
         "messages": [
             {
                 "role": "user",
@@ -80,7 +81,7 @@ def extract_trip_from_image(
     parsed = _normalize_extraction(_parse_json_object(content))
     extraction = VisionExtraction.model_validate(parsed)
     metadata = {
-        "model": model,
+        "model": resolved_model,
         "request_id": response.headers.get("x-request-id")
         or body.get("request_id")
         or body.get("id"),

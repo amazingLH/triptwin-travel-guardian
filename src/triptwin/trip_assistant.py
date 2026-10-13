@@ -15,18 +15,19 @@ def answer_with_trip_context(
     context: dict[str, Any],
     *,
     settings: Settings | None = None,
-    model: str = "qwen3.8-flash",
+    model: str | None = None,
     timeout_seconds: float = 60,
 ) -> str:
     """Answer naturally while staying inside verified project evidence."""
 
     resolved_settings = settings or Settings.from_env()
+    resolved_model = model or resolved_settings.dashscope_text_model
     endpoint = (
         f"https://{resolved_settings.bailian_workspace_id}.cn-beijing.maas.aliyuncs.com"
         "/compatible-mode/v1/chat/completions"
     )
     payload = {
-        "model": model,
+        "model": resolved_model,
         "messages": [
             {
                 "role": "system",

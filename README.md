@@ -79,6 +79,8 @@ FLYAI_API_KEY=
 BAILIAN_WORKSPACE_ID=
 BAILIAN_AGENT_ID=
 BAILIAN_ENVIRONMENT_ID=
+DASHSCOPE_TEXT_MODEL=qwen3.7-flash
+DASHSCOPE_VISION_MODEL=qwen3.7-flash
 ```
 
 然后启动：
@@ -109,6 +111,14 @@ BAILIAN_AGENT_ID
 BAILIAN_ENVIRONMENT_ID
 ```
 
+模型名称不是密钥，可按需在普通环境变量中覆盖；未配置时默认使用
+`qwen3.7-flash`：
+
+```text
+DASHSCOPE_TEXT_MODEL=qwen3.7-flash
+DASHSCOPE_VISION_MODEL=qwen3.7-flash
+```
+
 部署完成后必须使用无痕窗口和手机网络分别测试，并确认运行日志不包含凭据。
 
 ## 数据与能力边界
@@ -116,6 +126,7 @@ BAILIAN_ENVIRONMENT_ID
 - 候选价格、库存、天气和交通结果都有时效性，页面展示的是对应获取时间的证据。
 - 高德地理编码可能返回行政区级结果；精度不足时会明确告警，不冒充精确 POI。
 - 浏览器历史仅保存在当前浏览器，最多 20 个会话；云端重启不会提供跨设备账户历史。
+- 公开站点中的自由问答和用户自传图片解析会使用部署者配置的百炼额度；合成示例、确定性风险检查、Plan B、缓存巡检和会话管理不调用模型。
 - 作品不执行预订、支付、退改或订单操作。
 - `examples/` 与演示图片均为合成数据，不包含真实个人信息。
 

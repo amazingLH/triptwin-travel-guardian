@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Mapping
 
@@ -23,21 +24,24 @@ class Settings(BaseModel):
     bailian_workspace_id: str = Field(min_length=1)
     bailian_agent_id: str = Field(min_length=1)
     bailian_environment_id: str = Field(min_length=1)
+    dashscope_text_model: str = Field(default="qwen3.7-flash", min_length=1)
+    dashscope_vision_model: str = Field(default="qwen3.7-flash", min_length=1)
 
     @classmethod
     def from_env(cls, path: str | Path = ".env") -> "Settings":
         env_path = Path(path)
-        if not env_path.is_file():
-            raise FileNotFoundError(
-                f"未找到配置文件：{env_path.resolve()}。请复制 .env.example 为 .env。"
-            )
-        values: Mapping[str, str | None] = dotenv_values(env_path)
+        file_values: Mapping[str, str | None] = (
+            dotenv_values(env_path) if env_path.is_file() else {}
+        )
         expected = {
             "DASHSCOPE_API_KEY": "dashscope_api_key",
             "FLYAI_API_KEY": "flyai_api_key",
             "BAILIAN_WORKSPACE_ID": "bailian_workspace_id",
             "BAILIAN_AGENT_ID": "bailian_agent_id",
             "BAILIAN_ENVIRONMENT_ID": "bailian_environment_id",
+        }
+        values = {
+            name: os.getenv(name) or file_values.get(name) for name in expected
         }
         missing = [name for name in expected if not (values.get(name) or "").strip()]
         if missing:
@@ -46,7 +50,17 @@ class Settings(BaseModel):
             **{
                 field: (values[name] or "").strip()
                 for name, field in expected.items()
-            }
+            },
+            dashscope_text_model=(
+                os.getenv("DASHSCOPE_TEXT_MODEL")
+                or file_values.get("DASHSCOPE_TEXT_MODEL")
+                or "qwen3.7-flash"
+            ).strip(),
+            dashscope_vision_model=(
+                os.getenv("DASHSCOPE_VISION_MODEL")
+                or file_values.get("DASHSCOPE_VISION_MODEL")
+                or "qwen3.7-flash"
+            ).strip(),
         )
 
     @property
