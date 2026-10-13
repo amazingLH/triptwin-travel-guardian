@@ -102,6 +102,9 @@ APP_CSS = """
 .import-photo-list figure:last-child {border-bottom:0}
 .import-photo-list img {display:block;width:100%;height:300px;object-fit:contain;cursor:default}
 .import-photo-list figcaption {font-size:12px;color:#566880;text-align:center;overflow-wrap:anywhere;margin-top:4px}
+#functional-examples {border:1px solid #d6e2f2;border-radius:12px;background:#f5f8fe}
+.example-actions {display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:6px!important}
+.example-actions button {min-width:0!important;font-size:12px!important;padding:8px 4px!important;white-space:normal!important}
 .gradio-container {max-width:1180px!important;margin:auto!important}
 .step-card {border:1px solid #e0e7f3!important;border-radius:18px!important;background:#fff!important;padding:20px!important;box-shadow:0 3px 16px #17233c06;margin-top:12px!important}
 .step-heading {display:flex;gap:12px;align-items:center;margin-bottom:8px}
@@ -1234,11 +1237,11 @@ def create_app() -> gr.Blocks:
                     scale=3,
                 )
                 with gr.Column(scale=2, min_width=260):
-                    load_button = gr.Button("行程功能示例", variant="secondary")
-                    with gr.Column(visible=False) as example_choices:
-                        single_example_button = gr.Button("单行程正常示例")
-                        multi_example_button = gr.Button("多行程正常示例")
-                        conflict_example_button = gr.Button("行程冲突异常示例")
+                    with gr.Accordion("行程功能示例", open=False, elem_id="functional-examples"):
+                        with gr.Row(elem_classes=["example-actions"]):
+                            single_example_button = gr.Button("单行程正常示例", size="sm", min_width=0)
+                            multi_example_button = gr.Button("多行程正常示例", size="sm", min_width=0)
+                            conflict_example_button = gr.Button("行程冲突异常示例", size="sm", min_width=0)
                         gr.Markdown("单行程按钮展示杭州完整行程及其风险；多行程和冲突按钮使用脱敏车票。示例预算与人数为演示设置。")
                     preview = gr.HTML(value="", visible=False)
                     clear_import_button = gr.Button("清空已导入行程", variant="secondary")
@@ -1369,7 +1372,6 @@ def create_app() -> gr.Blocks:
             inputs=[browser_store],
             outputs=[*session_outputs, *view_outputs],
         )
-        load_button.click(lambda: gr.update(visible=True), outputs=example_choices, api_name=False)
         import_outputs = [
             state, amap_status, inspection_status, privacy_confirmed, status,
             trip_json, confidence, low_confidence, timeline, confirmed,
