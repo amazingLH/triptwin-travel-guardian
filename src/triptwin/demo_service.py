@@ -84,7 +84,8 @@ def timeline_html(trip_payload: dict[str, Any]) -> str:
         place = event.location or event.destination or event.origin
         items.append(
             "<div class='timeline-item'>"
-            f"<div class='timeline-time'>{event.start:%m/%d %H:%M}–{event.end:%H:%M}</div>"
+            f"<div class='timeline-time'>{event.start:%m/%d %H:%M}–"
+            f"{event.end.strftime('%H:%M') if event.start.date() == event.end.date() else event.end.strftime('%m/%d %H:%M')}</div>"
             f"<div><b>{escape(event.title)}</b>{protected}<br>"
             f"<span>{escape(place.name if place else '地点未提供')} · "
             f"¥{event.cost_cny if event.cost_cny is not None else '待确认'} · "

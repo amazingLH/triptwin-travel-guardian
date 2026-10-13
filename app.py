@@ -93,6 +93,15 @@ APP_CSS = """
 .session-bar {border:1px solid #d9e2f2;border-radius:14px;background:#f8fafc;padding:10px 14px}
 .quota-card {background:#fff7ed;border:1px solid #fdba74;border-radius:14px;padding:12px 16px;color:#7c2d12}
 .quota-card b {color:#9a3412}
+.gradio-container {max-width:1180px!important;margin:auto!important}
+.step-card {border:1px solid #e0e7f3!important;border-radius:18px!important;background:#fff!important;padding:20px!important;box-shadow:0 3px 16px #17233c06;margin-top:12px!important}
+.step-heading {display:flex;gap:12px;align-items:center;margin-bottom:8px}
+.step-number {display:grid;place-items:center;flex-shrink:0;width:34px;height:34px;border-radius:11px;background:#635bff;color:white;font-weight:700}
+.step-heading h2 {font-size:19px;margin:0;color:#17233c}.step-heading p {margin:3px 0 0;color:#667085;font-size:13px}
+.step-nav {display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}.step-nav a {padding:8px 12px;background:#eef2ff;border-radius:20px;text-decoration:none;color:#5145cd;font-size:13px}
+.step-card {scroll-margin-top:20px}
+.session-bar {align-items:center!important}.session-bar button {min-height:38px!important}
+@media(max-width:640px) {.step-card {padding:14px!important}.hero {padding:18px}.timeline-item {grid-template-columns:100px 1fr;gap:10px}}
 #tripgraph-editor .codemirror-wrapper {height:360px!important;max-height:360px!important;overflow:hidden!important}
 #tripgraph-editor .cm-editor {height:100%!important;max-height:100%!important}
 #tripgraph-editor .cm-scroller {height:100%!important;max-height:100%!important;overflow-y:auto!important}
@@ -1045,34 +1054,40 @@ def create_app() -> gr.Blocks:
             "达到限制后，合成示例、确定性风险检查和已生成结果仍可查看。</div>"
         )
         gr.Markdown(f"> **隐私与服务声明：** {DISCLAIMER}")
-        with gr.Row(elem_classes=["session-bar"]):
-            with gr.Column(scale=3):
+        gr.HTML("<nav class='step-nav' aria-label='使用步骤'><a href='#step-import'>1 导入行程</a><a href='#step-build'>2 构建与校对</a><a href='#step-risk'>3 检查风险</a><a href='#step-plan'>4 生成 Plan B</a><a href='#step-chat'>5 提问与导出</a></nav>")
+        with gr.Accordion("我的会话 · 新建 / 查看历史", open=False):
+            with gr.Row(elem_classes=["session-bar"]):
                 history_select = gr.Dropdown(
-                    choices=[], label="历史会话", interactive=True
+                    choices=[], label="历史会话", interactive=True, scale=3
                 )
-                session_badge = gr.Markdown("正在初始化独立会话……")
-            with gr.Column(scale=1, min_width=180):
                 open_session_button = gr.Button("打开所选会话")
                 new_session_button = gr.Button(
                     "＋ 新建独立会话", variant="secondary"
                 )
+            session_badge = gr.Markdown("正在初始化独立会话……")
+            with gr.Row():
                 delete_session_button = gr.Button("删除当前会话", variant="stop")
                 clear_sessions_button = gr.Button("清空全部历史", variant="stop")
-        with gr.Row():
-            with gr.Column(scale=1):
+        with gr.Column(elem_id="step-import", elem_classes=["step-card"]):
+            gr.HTML("<div class='step-heading'><span class='step-number'>1</span><div><h2>导入行程</h2><p>上传自己的截图，或载入合成示例快速体验。完成后继续第 2 步。</p></div></div>")
+            with gr.Row():
                 image = gr.File(
                     type="filepath",
                     file_count="multiple",
                     file_types=["image"],
                     label="① 上传 1–5 张行程截图",
+                    scale=3,
                 )
-                load_button = gr.Button("载入合成示例", variant="secondary")
-                privacy_confirmed = gr.Checkbox(
-                    label="我确认自行上传的图片已遮挡身份证号、手机号和票号"
-                )
-                build_button = gr.Button("② 构建旅行数字孪生", variant="primary")
-                status = gr.Markdown("等待载入图片。")
-            with gr.Column(scale=1):
+                load_button = gr.Button("载入合成示例", variant="secondary", scale=1)
+            privacy_confirmed = gr.Checkbox(
+                label="自行上传前，我已遮挡身份证号、手机号和票号（合成示例无需勾选）"
+            )
+        with gr.Column(elem_id="step-build", elem_classes=["step-card"]):
+            gr.HTML("<div class='step-heading'><span class='step-number'>2</span><div><h2>构建与校对行程</h2><p>点击构建后查看时间线；如需修正，展开校对区域。确认后继续第 3 步。</p></div></div>")
+            build_button = gr.Button("② 构建旅行数字孪生", variant="primary")
+            status = gr.Markdown("等待载入图片。")
+            timeline = gr.HTML(label="TripGraph 时间线")
+            with gr.Accordion("校对与修改 · 结构化行程", open=False):
                 trip_json = gr.Code(
                     language="json",
                     label="结构化 TripGraph（可校对修改）",
@@ -1082,35 +1097,34 @@ def create_app() -> gr.Blocks:
                     elem_id="tripgraph-editor",
                 )
                 apply_edits_button = gr.Button("应用并校验 TripGraph 修改")
-                export_button = gr.Button("导出 TripGraph JSON 与日历 ICS")
-                export_files = gr.File(
-                    label="导出文件",
-                    file_count="multiple",
-                    interactive=False,
-                )
+            with gr.Accordion("查看字段识别置信度", open=False):
                 confidence = gr.Dataframe(
                     headers=["字段", "置信度"],
                     datatype=["str", "number"],
                     interactive=False,
                     label="字段置信度",
+                    max_height=240,
                 )
-                low_confidence = gr.Markdown("尚未解析。")
-                confirmed = gr.Checkbox(label="我已核对并确认低置信字段")
-        timeline = gr.HTML(label="TripGraph 时间线")
-        with gr.Row():
-            check_button = gr.Button("③ 检查风险", variant="primary")
-            recheck_button = gr.Button("重新检查")
-            plan_button = gr.Button("④ 生成 Plan B", variant="primary")
-        with gr.Row():
+            low_confidence = gr.Markdown("尚未解析。")
+            confirmed = gr.Checkbox(label="我已核对并确认低置信字段")
+        with gr.Column(elem_id="step-risk", elem_classes=["step-card"]):
+            gr.HTML("<div class='step-heading'><span class='step-number'>3</span><div><h2>检查旅行风险</h2><p>检查时间衔接、日期、预算与体力等风险。修改行程后可重新检查。</p></div></div>")
+            with gr.Row():
+                check_button = gr.Button("③ 检查风险", variant="primary")
+                recheck_button = gr.Button("重新检查")
             risks = gr.Markdown("### 风险卡片\n\n等待检查。")
+        with gr.Column(elem_id="step-plan", elem_classes=["step-card"]):
+            gr.HTML("<div class='step-heading'><span class='step-number'>4</span><div><h2>生成 Plan B</h2><p>基于当前行程生成替代方案。自行上传的行程会执行实时工具核验。</p></div></div>")
+            plan_button = gr.Button("④ 生成 Plan B", variant="primary")
             plan_b = gr.Markdown("### 原方案 / Plan B\n\n等待生成。")
-        trace = gr.Markdown("### Agent 工具执行轨迹摘要\n\n等待生成。")
-        with gr.Row():
-            amap_status = gr.Markdown(EMPTY_AMAP_STATUS)
-            inspection_status = gr.Markdown(EMPTY_INSPECTION_STATUS)
-        inspect_button = gr.Button("⑤ 查看 / 执行实时巡检", variant="secondary")
-        with gr.Row():
-            with gr.Column(scale=1, elem_classes=["guide-card"]):
+            with gr.Accordion("查看工具证据与实时巡检", open=False):
+                inspect_button = gr.Button("查看 / 执行实时巡检", variant="secondary")
+                amap_status = gr.Markdown(EMPTY_AMAP_STATUS)
+                inspection_status = gr.Markdown(EMPTY_INSPECTION_STATUS)
+                trace = gr.Markdown("### Agent 工具执行轨迹摘要\n\n等待生成。")
+        with gr.Column(elem_id="step-chat", elem_classes=["step-card"]):
+            gr.HTML("<div class='step-heading'><span class='step-number'>5</span><div><h2>提问与导出</h2><p>针对当前行程提问，或导出 JSON 与日历文件保存结果。</p></div></div>")
+            with gr.Column(elem_classes=["guide-card"]):
                 gr.HTML(
                     "<div class='guide-title-row'><h3>💡 演示操作提示</h3>"
                     "<span class='example-free-note'>使用“载入合成示例”后，以下四个标准问题"
@@ -1118,18 +1132,13 @@ def create_app() -> gr.Blocks:
                     "请完整复制到“向 TripTwin 提问”中，以免改写后计入额度。</span></div>"
                 )
                 gr.Markdown(
-                    """1. **载入合成示例**
-2. **构建旅行数字孪生**
-3. **检查风险**
-4. **生成 Plan B**
-
-完成后可以提问：
+                    """完成前面的步骤后，可以提问：
 - 为什么存在衔接风险？
 - 第二晚推荐住哪里？
 - 是否会自动预定？
 - 候选数据来自哪里？"""
                 )
-            with gr.Column(scale=2, elem_classes=["chat-panel"]):
+            with gr.Column(elem_classes=["chat-panel"]):
                 chatbot = gr.Chatbot(
                     label="TripTwin 智能回复",
                     layout="bubble",
@@ -1143,6 +1152,11 @@ def create_app() -> gr.Blocks:
                         scale=5,
                     )
                     ask_button = gr.Button("发送", variant="primary", scale=1)
+            with gr.Accordion("导出行程 · JSON / 日历 ICS", open=False):
+                export_button = gr.Button("导出 TripGraph JSON 与日历 ICS")
+                export_files = gr.File(
+                    label="导出文件", file_count="multiple", interactive=False
+                )
 
         session_inputs = [
             browser_store,
