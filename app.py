@@ -6,7 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import secrets
+import tempfile
 import sys
 from html import escape
 from urllib.parse import quote
@@ -46,6 +46,8 @@ from triptwin.session_history import (
     save_active_session,
     switch_session,
 )
+from triptwin.history_media import capture_previews, previews_html, sanitize_previews
+from triptwin.browser_secrets import persistent_secret
 from triptwin.runtime_agent import run_live_trip
 from triptwin.exporter import export_trip_files
 from triptwin.input_completion import completion_rows, cancelled_orders, confirm_draft, validation_message
@@ -147,8 +149,9 @@ footer {color:#b7cfe4!important}footer a,footer button {color:#b7cfe4!important}
 """
 
 _LOCAL_ENV = dotenv_values(PROJECT_ROOT / ".env")
-BROWSER_STATE_SECRET = os.getenv("TRIPTWIN_BROWSER_STATE_SECRET") or _LOCAL_ENV.get("TRIPTWIN_BROWSER_STATE_SECRET") or secrets.token_urlsafe(32)
-RATE_LIMIT_SALT = os.getenv("TRIPTWIN_RATE_LIMIT_SALT") or _LOCAL_ENV.get("TRIPTWIN_RATE_LIMIT_SALT") or secrets.token_urlsafe(32)
+_LOCAL_SECRET_DIR = Path(os.getenv("LOCALAPPDATA") or os.getenv("XDG_STATE_HOME") or tempfile.gettempdir()) / "triptwin" / hashlib.sha256(str(PROJECT_ROOT).encode()).hexdigest()[:16]
+BROWSER_STATE_SECRET = persistent_secret(os.getenv("TRIPTWIN_BROWSER_STATE_SECRET") or _LOCAL_ENV.get("TRIPTWIN_BROWSER_STATE_SECRET"), _LOCAL_SECRET_DIR, "browser-state-secret")
+RATE_LIMIT_SALT = persistent_secret(os.getenv("TRIPTWIN_RATE_LIMIT_SALT") or _LOCAL_ENV.get("TRIPTWIN_RATE_LIMIT_SALT"), _LOCAL_SECRET_DIR, "rate-limit-salt")
 
 
 def live_evidence_is_recent(state):
@@ -1178,7 +1181,14 @@ def _session_snapshot(
     chat_history: list[dict[str, Any]] | None,
     amap_status: str | None,
     inspection_status: str | None,
+    image_previews: Any = None,
+    editor_text: str | None = None,
+    completion_values: Any = None,
+    question_text: str | None = None,
 ) -> dict[str, Any]:
+    trip_state = dict(trip_state or {})
+    if isinstance(trip_state.get("draft_trip"), dict) and isinstance(completion_values, list):
+        trip_state["completion_rows"] = completion_values
     safe_amap, safe_inspection = safe_context_panels(
         trip_state, amap_status, inspection_status
     )
@@ -1192,6 +1202,9 @@ def _session_snapshot(
         "chat_history": list(chat_history or []),
         "amap_status": safe_amap,
         "inspection_status": safe_inspection,
+        "image_previews": sanitize_previews(image_previews),
+        "editor_text": editor_text,
+        "question_text": str(question_text or ""),
     }
 
 
@@ -1207,7 +1220,7 @@ def _session_badge(session: dict[str, Any]) -> str:
     return (
         "**当前页面 Session ID：** `"
         + str(session["id"])
-        + "`  \n历史保存在本浏览器；原始上传图片不会写入历史会话。"
+        + "`  \n选择历史会话即可自动切换。行程、解析结果、风险、Plan B、对话及小尺寸截图预览保存在本浏览器；服务器原图仍定期清理。"
     )
 
 
@@ -1245,7 +1258,7 @@ def _session_view(session: dict[str, Any]) -> tuple[Any, ...]:
     return (
         None,
         snapshot.get("status") or "等待载入图片。",
-        json.dumps(trip if isinstance(trip, dict) else draft, ensure_ascii=False, indent=2) if isinstance(trip, dict) or isinstance(draft, dict) else "",
+        snapshot.get("editor_text") if isinstance(snapshot.get("editor_text"), str) else json.dumps(trip if isinstance(trip, dict) else draft, ensure_ascii=False, indent=2) if isinstance(trip, dict) or isinstance(draft, dict) else "",
         confidence_rows,
         low_text,
         timeline,
@@ -1253,7 +1266,7 @@ def _session_view(session: dict[str, Any]) -> tuple[Any, ...]:
         snapshot.get("risks") or "### 风险卡片\n\n等待检查。",
         snapshot.get("plan_b") or "### 原方案 / Plan B\n\n等待生成。",
         snapshot.get("trace") or "### Agent 工具执行轨迹摘要\n\n等待生成。",
-        "",
+        snapshot.get("question_text") or "",
         snapshot.get("chat_history") or [],
         trip_state,
         safe_amap,
@@ -1263,9 +1276,29 @@ def _session_view(session: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
+def _restored_history_view(session: dict[str, Any]) -> tuple[Any, ...]:
+    """Restore every visible panel directly, including unchanged State values."""
+    snapshot = session.get("snapshot") or {}
+    state = snapshot.get("trip_state") or {}
+    previews = sanitize_previews(snapshot.get("image_previews"))
+    # Old public examples can recover previews from known assets, not arbitrary paths.
+    if not previews and state.get("trip_source") == "synthetic_example":
+        previews = capture_previews([SAMPLE_IMAGE_PATH])
+    elif not previews and state.get("trip_source") == "ticket_example":
+        trip = state.get("trip") or {}
+        previews = capture_previews(example_paths("conflict" if len(trip.get("events", [])) == 3 else "multi"))
+    return (
+        *_session_view(session), previews,
+        gr.update(value=previews_html(previews), visible=bool(previews)),
+        *completion_panel(state),
+        gr.update(visible=isinstance(state.get("trip"), dict) or isinstance(state.get("draft_trip"), dict)),
+        *local_options_view(state),
+    )
+
+
 def initialize_session_history(browser_store: Any) -> tuple[Any, ...]:
     store, session = ensure_active_session(browser_store)
-    return store, _history_update(store), _session_badge(session), *_session_view(session)
+    return store, _history_update(store), _session_badge(session), *_restored_history_view(session)
 
 
 def persist_current_session(
@@ -1279,6 +1312,10 @@ def persist_current_session(
     chat_history: list[dict[str, Any]] | None,
     amap_status: str | None,
     inspection_status: str | None,
+    image_previews: Any = None,
+    editor_text: str | None = None,
+    completion_values: Any = None,
+    question_text: str | None = None,
 ) -> tuple[dict[str, Any], gr.Dropdown, str]:
     snapshot = _session_snapshot(
         trip_state,
@@ -1290,6 +1327,7 @@ def persist_current_session(
         chat_history,
         amap_status,
         inspection_status,
+        image_previews, editor_text, completion_values, question_text,
     )
     store = save_active_session(browser_store, snapshot)
     session = next(item for item in store["sessions"] if item["id"] == store["active_id"])
@@ -1307,6 +1345,10 @@ def create_new_history_session(
     chat_history: list[dict[str, Any]] | None,
     amap_status: str | None,
     inspection_status: str | None,
+    image_previews: Any = None,
+    editor_text: str | None = None,
+    completion_values: Any = None,
+    question_text: str | None = None,
 ) -> tuple[Any, ...]:
     snapshot = _session_snapshot(
         trip_state,
@@ -1318,9 +1360,10 @@ def create_new_history_session(
         chat_history,
         amap_status,
         inspection_status,
+        image_previews, editor_text, completion_values, question_text,
     )
     store, session = create_session(browser_store, current_snapshot=snapshot)
-    return store, _history_update(store), _session_badge(session), *_session_view(session)
+    return store, _history_update(store), _session_badge(session), *_restored_history_view(session)
 
 
 def open_history_session(
@@ -1335,6 +1378,10 @@ def open_history_session(
     chat_history: list[dict[str, Any]] | None,
     amap_status: str | None,
     inspection_status: str | None,
+    image_previews: Any = None,
+    editor_text: str | None = None,
+    completion_values: Any = None,
+    question_text: str | None = None,
 ) -> tuple[Any, ...]:
     if not target_id:
         raise gr.Error("请先选择一个历史会话。")
@@ -1348,6 +1395,7 @@ def open_history_session(
         chat_history,
         amap_status,
         inspection_status,
+        image_previews, editor_text, completion_values, question_text,
     )
     try:
         store, session = switch_session(
@@ -1355,28 +1403,33 @@ def open_history_session(
         )
     except ValueError as exc:
         raise gr.Error(str(exc)) from None
-    return store, _history_update(store), _session_badge(session), *_session_view(session)
+    return store, _history_update(store), _session_badge(session), *_restored_history_view(session)
 
 
 def delete_current_history_session(browser_store: Any) -> tuple[Any, ...]:
     store, active = ensure_active_session(browser_store)
     store, session = delete_session(store, active["id"])
-    return store, _history_update(store), _session_badge(session), *_session_view(session)
+    return store, _history_update(store), _session_badge(session), *_restored_history_view(session)
 
 
 def clear_all_history_sessions(browser_store: Any) -> tuple[Any, ...]:
     store, session = clear_sessions(browser_store)
-    return store, _history_update(store), _session_badge(session), *_session_view(session)
+    return store, _history_update(store), _session_badge(session), *_restored_history_view(session)
 
 
 def create_app() -> gr.Blocks:
     with gr.Blocks(title="TripTwin 旅行数字孪生守护者", delete_cache=(3600, 3600)) as demo:
         state = gr.State({})
+        image_previews = gr.State([])
         browser_store = gr.BrowserState(
             default_value={"version": 1, "active_id": None, "sessions": []},
             storage_key="triptwin_sessions_v1",
             secret=BROWSER_STATE_SECRET,
         )
+        # BrowserState encryption is asynchronous on the frontend. Use a
+        # tab-local server State as the authority between callbacks, then mirror
+        # updates to localStorage rather than reading a stale browser snapshot.
+        history_store = gr.State({})
         gr.HTML("<div class='hero'><h1>TripTwin 旅行数字孪生守护者</h1><p>把行程截图变成 TripGraph，结合真实 FlyAI 与高德 MCP 证据发现衔接、日期、预算、天气和体力风险，并生成可验证 Plan B。</p></div>")
         gr.HTML(
             "<div class='quota-card'><b>使用额度说明：</b>作者腰包扁扁，短期内可承担的费用有限，"
@@ -1396,7 +1449,6 @@ def create_app() -> gr.Blocks:
                 history_select = gr.Dropdown(
                     choices=[], label="历史会话", interactive=True, scale=3
                 )
-                open_session_button = gr.Button("打开所选会话")
                 new_session_button = gr.Button(
                     "＋ 新建独立会话", variant="secondary"
                 )
@@ -1428,6 +1480,7 @@ def create_app() -> gr.Blocks:
             )
             gr.Markdown("支持 12306 车票、机票、酒店订单或完整行程截图，**无需固定模板**。截图缺少的必要信息会在第 2 步提示手动补充；也可清空后上传更详细的行程截图。请裁掉广告并遮挡姓名、订单号、流水号等信息。")
             gr.Markdown("自行上传的截图会发送至百炼解析，系统不会自动给原图打码。服务器临时上传与导出文件约 1–2 小时后清理；过期后请重新上传或导出。")
+            gr.Markdown("历史会话会在本浏览器保存小尺寸截图预览和已解析行程；切换或刷新不会重新调用模型。原图过期不影响查看已保存结果，但再次解析需重新上传。旧版本未保存的截图无法补回，请重新上传。")
         with gr.Column(elem_id="step-build", elem_classes=["step-card"]):
             gr.HTML("<div class='step-heading'><span class='step-number'>2</span><div><h2>解析、补全与构建</h2><p>先解析截图，再补全并确认必要信息，构建完成后继续第 3 步。合成示例的信息已完整。</p></div></div>")
             build_button = gr.Button("② 解析行程截图", variant="primary")
@@ -1520,7 +1573,7 @@ def create_app() -> gr.Blocks:
                 )
 
         session_inputs = [
-            browser_store,
+            history_store,
             state,
             status,
             confirmed,
@@ -1530,8 +1583,12 @@ def create_app() -> gr.Blocks:
             chatbot,
             amap_status,
             inspection_status,
+            image_previews,
+            trip_json,
+            completion_table,
+            question,
         ]
-        session_outputs = [browser_store, history_select, session_badge]
+        session_outputs = [history_store, history_select, session_badge]
         view_outputs = [
             image,
             status,
@@ -1550,12 +1607,24 @@ def create_app() -> gr.Blocks:
             inspection_status,
             export_files,
             privacy_confirmed,
+            image_previews,
+            preview,
+            completion_section,
+            completion_table,
+            completion_message,
+            editor_section,
+            local_options_section,
+            local_choice,
         ]
 
         demo.load(
             initialize_session_history,
             inputs=[browser_store],
             outputs=[*session_outputs, *view_outputs],
+        )
+        history_store.change(
+            lambda current: current, inputs=history_store, outputs=browser_store,
+            api_name=False,
         )
         import_outputs = [
             state, amap_status, inspection_status, privacy_confirmed, status,
@@ -1566,25 +1635,20 @@ def create_app() -> gr.Blocks:
         load_event = single_example_button.click(
             reset_import_view, outputs=import_outputs, api_name=False,
         ).then(load_example, outputs=[image, status, state], api_name="load_example")
-        image.upload(
-            reset_import_view,
-            outputs=import_outputs,
-            api_name=False,
-        ).then(persist_current_session, inputs=session_inputs, outputs=session_outputs)
-        image.clear(reset_import_view, outputs=import_outputs, api_name=False).then(
-            persist_current_session, inputs=session_inputs, outputs=session_outputs,
-        )
-        image.delete(reset_import_view, outputs=import_outputs, api_name=False).then(
-            persist_current_session, inputs=session_inputs, outputs=session_outputs,
-        )
+        def capture_import_preview(files):
+            return import_preview(files, preview), capture_previews(_image_paths(files))
+
+        # Only actual upload/delete/clear actions capture new media. Restoring a
+        # session programmatically must not clear its saved previews/results.
+        for event in (image.upload, image.clear, image.delete):
+            event(reset_import_view, outputs=import_outputs, api_name=False).then(
+                capture_import_preview, inputs=image, outputs=[preview, image_previews], api_name=False,
+            ).then(persist_current_session, inputs=session_inputs, outputs=session_outputs)
         load_context_event = load_event.then(
             context_panels_for_state,
             inputs=state,
             outputs=[amap_status, inspection_status],
         )
-        def preview_callback(files):
-            return import_preview(files, preview)
-        load_event.then(preview_callback, inputs=image, outputs=preview)
         for button, kind in ((multi_example_button, "multi"), (conflict_example_button, "conflict")):
             def make_loader(selected):
                 def loader():
@@ -1594,30 +1658,34 @@ def create_app() -> gr.Blocks:
                 make_loader(kind), outputs=[image, status, state], api_name=False,
             )
             selected_event.then(context_panels_for_state, inputs=state, outputs=[amap_status, inspection_status]).then(
+                capture_import_preview, inputs=image, outputs=[preview, image_previews], api_name=False,
+            ).then(
                 persist_current_session, inputs=session_inputs, outputs=session_outputs,
             )
-            selected_event.then(preview_callback, inputs=image, outputs=preview)
-        image.change(preview_callback, inputs=image, outputs=preview, api_name=False)
         clear_import_button.click(lambda: None, outputs=image, api_name=False).then(
             reset_import_view, outputs=import_outputs,
         ).then(completion_panel, inputs=state, outputs=[completion_section, completion_table, completion_message]).then(
+            capture_import_preview, inputs=image, outputs=[preview, image_previews], api_name=False,
+        ).then(
             persist_current_session, inputs=session_inputs, outputs=session_outputs,
         )
         load_context_event.then(
+            capture_import_preview, inputs=image, outputs=[preview, image_previews], api_name=False,
+        ).then(
             persist_current_session,
             inputs=session_inputs,
             outputs=session_outputs,
         )
         build_event = build_button.click(
             build_twin_guarded,
-            inputs=[image, privacy_confirmed, browser_store],
+            inputs=[image, privacy_confirmed, history_store],
             outputs=[
                 trip_json,
                 confidence,
                 low_confidence,
                 timeline,
                 state,
-                browser_store,
+                history_store,
             ],
             api_name=False,
         ).then(
@@ -1689,8 +1757,8 @@ def create_app() -> gr.Blocks:
         )
         plan_event = plan_button.click(
             generate_plan_b_guarded,
-            inputs=[state, confirmed, browser_store],
-            outputs=[plan_b, trace, state, amap_status, inspection_status, browser_store],
+            inputs=[state, confirmed, history_store],
+            outputs=[plan_b, trace, state, amap_status, inspection_status, history_store],
             api_name=False,
         )
         plan_render_event = plan_event.then(
@@ -1714,8 +1782,8 @@ def create_app() -> gr.Blocks:
         )
         inspect_event = inspect_button.click(
             run_live_inspection_guarded,
-            inputs=[state, confirmed, browser_store],
-            outputs=[amap_status, inspection_status, state, browser_store],
+            inputs=[state, confirmed, history_store],
+            outputs=[amap_status, inspection_status, state, history_store],
             api_name=False,
         )
         inspect_render_event = inspect_event.then(
@@ -1732,8 +1800,8 @@ def create_app() -> gr.Blocks:
         )
         ask_event = ask_button.click(
             answer_question_guarded,
-            inputs=[question, chatbot, state, browser_store],
-            outputs=[question, chatbot, browser_store],
+            inputs=[question, chatbot, state, history_store],
+            outputs=[question, chatbot, history_store],
             api_name=False,
         )
         ask_event.then(
@@ -1743,8 +1811,8 @@ def create_app() -> gr.Blocks:
         )
         submit_event = question.submit(
             answer_question_guarded,
-            inputs=[question, chatbot, state, browser_store],
-            outputs=[question, chatbot, browser_store],
+            inputs=[question, chatbot, state, history_store],
+            outputs=[question, chatbot, history_store],
             api_name=False,
         )
         submit_event.then(
@@ -1758,24 +1826,30 @@ def create_app() -> gr.Blocks:
             outputs=[*session_outputs, *view_outputs],
             api_name="new_session",
         )
-        open_session_button.click(
+        history_select.input(
             open_history_session,
             inputs=[history_select, *session_inputs],
             outputs=[*session_outputs, *view_outputs],
-            api_name="open_session",
+            api_name=False,
+            trigger_mode="always_last",
         )
         delete_session_button.click(
             delete_current_history_session,
-            inputs=[browser_store],
+            inputs=[history_store],
             outputs=[*session_outputs, *view_outputs],
             api_name=False,
         )
         clear_sessions_button.click(
             clear_all_history_sessions,
-            inputs=[browser_store],
+            inputs=[history_store],
             outputs=[*session_outputs, *view_outputs],
             api_name=False,
         )
+        for component in (trip_json, completion_table):
+            component.input(
+                persist_current_session, inputs=session_inputs, outputs=session_outputs,
+                api_name=False, trigger_mode="always_last",
+            )
         state.change(completion_panel, inputs=state, outputs=[completion_section, completion_table, completion_message], api_name=False)
         state.change(local_options_view, inputs=state, outputs=[local_options_section, local_choice], api_name=False)
         state.change(

@@ -8,6 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 from triptwin.usage_guard import normalize_browser_usage
+from triptwin.history_media import sanitize_previews
 
 
 STORE_VERSION = 1
@@ -65,14 +66,17 @@ def save_active_session(value: Any, snapshot: dict[str, Any]) -> dict[str, Any]:
     store = ensure_store(value)
     session = _find_in_store(store, store.get("active_id"))
     if session is None:
-        store, session = create_session(store)
+        store, created = create_session(store)
+        session = _find_in_store(store, created["id"])
     session["snapshot"] = _sanitize_snapshot(snapshot)
     session["updated_at"] = datetime.now(UTC).isoformat()
     trip_state = session["snapshot"].get("trip_state")
-    trip = trip_state.get("trip") if isinstance(trip_state, dict) else None
+    trip = (trip_state.get("trip") or trip_state.get("draft_trip")) if isinstance(trip_state, dict) else None
     title = trip.get("title") if isinstance(trip, dict) else None
     if isinstance(title, str) and title.strip():
         session["title"] = title.strip()[:60]
+    elif session["snapshot"].get("image_previews"):
+        session["title"] = session["snapshot"]["image_previews"][0]["name"][:60]
     return store
 
 
@@ -83,7 +87,7 @@ def switch_session(
     current_snapshot: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     store = ensure_store(value)
-    if current_snapshot is not None:
+    if current_snapshot is not None and target_id != store.get("active_id"):
         store = save_active_session(store, current_snapshot)
     target = _find_in_store(store, target_id)
     if target is None:
@@ -152,6 +156,9 @@ def blank_snapshot() -> dict[str, Any]:
         "chat_history": [],
         "amap_status": "",
         "inspection_status": "",
+        "image_previews": [],
+        "editor_text": None,
+        "question_text": "",
     }
 
 
@@ -162,17 +169,28 @@ def _sanitize_snapshot(value: Any) -> dict[str, Any]:
     for key in base:
         if key in value:
             base[key] = copy.deepcopy(value[key])
+    base["image_previews"] = sanitize_previews(base.get("image_previews"))
+    if not isinstance(base.get("editor_text"), str):
+        base["editor_text"] = None
+    base["question_text"] = str(base.get("question_text") or "")[:500]
     history = base.get("chat_history")
     if not isinstance(history, list):
         base["chat_history"] = []
     else:
-        base["chat_history"] = [
-            {"role": str(item.get("role") or ""), "content": str(item.get("content") or "")}
-            for item in history
-            if isinstance(item, dict)
-            and item.get("role") in {"user", "assistant"}
-            and isinstance(item.get("content"), str)
-        ][-100:]
+        messages = []
+        for item in history:
+            if not isinstance(item, dict) or item.get("role") not in {"user", "assistant"}:
+                continue
+            content = item.get("content")
+            if isinstance(content, list):
+                content = "\n".join(
+                    block["text"] for block in content
+                    if isinstance(block, dict) and block.get("type") == "text"
+                    and isinstance(block.get("text"), str)
+                )
+            if isinstance(content, str) and content:
+                messages.append({"role": item["role"], "content": content})
+        base["chat_history"] = messages[-100:]
     return base
 
 
