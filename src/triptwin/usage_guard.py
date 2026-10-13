@@ -24,17 +24,17 @@ def current_day() -> str:
 
 def browser_limits() -> dict[UsageKind, int]:
     return {
-        "questions": _positive_int("TRIPTWIN_BROWSER_QUESTION_LIMIT", 5),
-        "images": _positive_int("TRIPTWIN_BROWSER_IMAGE_LIMIT", 2),
-        "agent_runs": _positive_int("TRIPTWIN_BROWSER_AGENT_LIMIT", 1),
+        "questions": _positive_int("TRIPTWIN_BROWSER_QUESTION_LIMIT", 20),
+        "images": _positive_int("TRIPTWIN_BROWSER_IMAGE_LIMIT", 30),
+        "agent_runs": _positive_int("TRIPTWIN_BROWSER_AGENT_LIMIT", 4),
     }
 
 
 def global_limits() -> dict[UsageKind, int]:
     return {
-        "questions": _positive_int("TRIPTWIN_GLOBAL_QUESTION_LIMIT", 40),
-        "images": _positive_int("TRIPTWIN_GLOBAL_IMAGE_LIMIT", 5),
-        "agent_runs": _positive_int("TRIPTWIN_GLOBAL_AGENT_LIMIT", 8),
+        "questions": _positive_int("TRIPTWIN_GLOBAL_QUESTION_LIMIT", 500),
+        "images": _positive_int("TRIPTWIN_GLOBAL_IMAGE_LIMIT", 600),
+        "agent_runs": _positive_int("TRIPTWIN_GLOBAL_AGENT_LIMIT", 50),
     }
 
 
