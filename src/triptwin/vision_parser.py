@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import copy
+import hashlib
 import json
 import io
 import re
@@ -20,6 +21,7 @@ from PIL import Image, ImageOps
 
 from triptwin.config import ModelSettings, Settings
 from triptwin.models import Trip, TripEvent, TripConstraints, TravelerProfile, Location
+from triptwin.image_merge import merge_image_records
 
 
 class VisionExtraction(BaseModel):
@@ -49,6 +51,10 @@ class VisionExtraction(BaseModel):
             *(key for key, score in self.field_confidence.items() if score < 0.8),
         ]))
         return self
+
+
+class ImageVisionExtraction(VisionExtraction):
+    image_index: int = Field(ge=1, le=5, strict=True)
 
 
 def extract_trip_from_image(
@@ -85,10 +91,12 @@ def extract_trip_from_images(
         raise ValueError("多张图片原始文件合计超过 20 MB，请压缩后重试。")
     resolved_settings = settings or ModelSettings.from_env()
     resolved_model = model or resolved_settings.dashscope_vision_model
-    image_blocks = [
-        {"type": "image_url", "image_url": {"url": _safe_data_url(path)}}
-        for path in paths
-    ]
+    image_blocks = []
+    for index, path in enumerate(paths, 1):
+        image_blocks.extend([
+            {"type": "text", "text": f"第 {index} 张图片，image_index={index}。只提取此图的订单事实。"},
+            {"type": "image_url", "image_url": {"url": _safe_data_url(path)}},
+        ])
     endpoint = (
         f"https://{resolved_settings.bailian_workspace_id}.cn-beijing.maas.aliyuncs.com"
         "/compatible-mode/v1/chat/completions"
@@ -108,7 +116,7 @@ def extract_trip_from_images(
                 "role": "user",
                 "content": [
                     *image_blocks,
-                    {"type": "text", "text": _EXTRACTION_PROMPT},
+                    {"type": "text", "text": _batch_prompt(len(paths)) if len(paths) > 1 else _EXTRACTION_PROMPT},
                 ],
             }
         ],
@@ -130,6 +138,7 @@ def extract_trip_from_images(
     response: httpx.Response | None = None
     body: dict[str, Any] = {}
     attempt_count = 0
+    image_report = []
     with httpx.Client(timeout=timeout_seconds) as client:
         for attempt in range(2):
             attempt_count += 1
@@ -147,14 +156,34 @@ def extract_trip_from_images(
                 usages.append(body["usage"])
             content = body["choices"][0]["message"]["content"]
             try:
-                parsed = _normalize_extraction(_parse_json_object(content))
+                raw = _parse_json_object(content)
+                if len(paths) > 1:
+                    entries = raw.get("images")
+                    if not isinstance(entries, list) or not entries:
+                        raise ValueError(f"上传 {len(paths)} 张图片，但未返回逐张图片解析；不能用单段行程代替全部图片。")
+                    records = []
+                    for entry in entries:
+                        if not isinstance(entry, dict):
+                            raise ValueError("逐图解析格式错误。")
+                        image_index = entry.get("image_index")
+                        try:
+                            record = ImageVisionExtraction.model_validate(_normalize_extraction(entry))
+                        except ValueError:
+                            label = f"第 {image_index} 张图片" if isinstance(image_index, int) and not isinstance(image_index, bool) else "某张图片（图片编号缺失或无效）"
+                            raise ValueError(f"{label}的行程未识别完整；请裁剪订单主体后重新解析，不能忽略此图。") from None
+                        records.append(record.model_dump(mode="json"))
+                    parsed, image_report = merge_image_records(records, [hashlib.sha256(path.read_bytes()).hexdigest() for path in paths])
+                else:
+                    parsed = _normalize_extraction(raw)
+                    events = parsed.get("trip", {}).get("events", [])
+                    image_report = [{"image_index": 1, "event_indices": list(range(len(events)))}]
                 extraction = VisionExtraction.model_validate(parsed)
                 break
             except (ValueError, KeyError, TypeError) as exc:
                 if attempt == 1:
                     raise ValueError(
-                        "视觉模型连续两次未返回符合结构要求的行程，未生成结果。"
-                        "请检查视觉模型配置，或裁剪到订单主要内容后重试。"
+                        "图片解析未核齐，已停止构建，不能据此报告无风险。"
+                        + str(exc)[:250] + " 请重新上传清晰的订单主体或分开解析。"
                     ) from exc
                 payload["messages"].extend(
                     [
@@ -162,8 +191,8 @@ def extract_trip_from_images(
                         {
                             "role": "user",
                             "content": (
-                                "上一份 JSON 未通过本地 schema 校验。请只修复结构并重新输出完整 JSON；"
-                                "不得补猜图片中没有的信息。校验摘要：" + str(exc)[:600]
+                                "上一份 JSON 未通过本地逐图覆盖/结构校验。请重新检查所有图片，输出规定结构的完整 JSON；"
+                                "不能删掉冲突或车次被遮挡的票；缺少字段写 null，不得猜测。校验摘要：" + str(exc)[:600]
                             ),
                         },
                     ]
@@ -177,6 +206,7 @@ def extract_trip_from_images(
         "usage": usages[-1] if usages else {},
         "attempts": attempt_count,
         "image_count": len(paths),
+        "image_report": image_report,
     }
     return extraction, metadata
 
@@ -427,10 +457,11 @@ def _parse_json_object(value: Any) -> dict[str, Any]:
     return result
 
 
-_EXTRACTION_PROMPT = """
-你是 途证哨 的行程单结构化解析器。用户可能上传同一行程的多张截图；请按时间合并、去重，但不得跨图猜测。只依据图片中明确可见的信息，输出一个 JSON 对象，禁止 Markdown、解释或代码围栏。
+_EXTRACTION_RULES = """
+你是途证哨的行程单结构化解析器。只依据每张图片中明确可见的信息，禁止 Markdown、解释或代码围栏。
 支持原始 12306 火车票订单、机票、酒店订单、聊天行程和完整行程单，不要求固定模板。
 单张车票仅生成一条 transport 事件，不得补造酒店、景点、预算、返程或其他乘客。
+多张不同车票必须分别保留；时间重叠是需要检查的事实，不能因为同一出发时间而删除、合并或修改时间。不同目的地、车次、日期或价格的订单不是重复订单。车次被遮挡时标题写“车次待确认”，仍保留可见的路线、日期、时间和价格。
 订单日期与广告日期不是出发日期；酒店促销、推荐入住日期等广告不得转成已预订行程。
 车票明确显示“已退票/已取消”时，将 metadata.booking_status 设置为 refunded/cancelled，不能加入 protected_event_ids。
 不得输出乘客姓名、订单号、业务流水号、座位号等身份或订单标识。车次可保留在标题中。
@@ -440,7 +471,6 @@ _EXTRACTION_PROMPT = """
 没有事件 ID 时自行生成 train-1 等合法小写 ID；version 必须是 1.0，不是 1.0.0。
 交通起止时间根据出发日期和到达时间生成；明确跨日则使用对应日期。trip 起止取实际事件范围。
 
-根节点必须且只能有：trip、field_confidence、low_confidence_fields、notes。
 trip 必须满足：
 1. trip_id、version、title、start、end、travelers、constraints、events、risks。
 2. 时间使用带 +08:00 时区的 ISO 8601。
@@ -456,4 +486,18 @@ trip 必须满足：
 field_confidence 是“字段路径: 0到1数值”的对象，至少覆盖行程起止、预算及每个事件的 title/start/end/cost_cny。
 low_confidence_fields 列出置信度低于 0.8 的字段路径；没有则输出空数组。
 notes 只记录图片缺失或模糊信息；不要输出任何身份证、手机号、票号或密钥。
-""".strip() + "\n完整结构定义（严格遵守）：\n" + json.dumps(VisionExtraction.model_json_schema(), ensure_ascii=False)
+""".strip()
+
+_EXTRACTION_PROMPT = _EXTRACTION_RULES + "\n根节点必须且只能有：trip、field_confidence、low_confidence_fields、notes。\n完整结构定义：\n" + json.dumps(VisionExtraction.model_json_schema(), ensure_ascii=False)
+
+
+def _batch_prompt(count: int) -> str:
+    return (
+        _EXTRACTION_RULES
+        + f'\n本次共 {count} 张图片。根节点只能有 images 数组，必须恰好有 {count} 项，image_index 从 1 到 {count} 各一次。'
+        '每项独立输出对应图片的 image_index、trip、field_confidence、low_confidence_fields、notes。'
+        '不得把其他图片的事件复制过来充数，也不得跨图删除、去重或解决冲突；程序负责合并和检查。'
+        '如果某图无法识别，仍返回该图项，events=[] 并说明原因，程序会提示用户重传，而不是跳过图片。'
+        '\n每个 images 数组元素的完整结构定义：\n'
+        + json.dumps(ImageVisionExtraction.model_json_schema(), ensure_ascii=False)
+    )

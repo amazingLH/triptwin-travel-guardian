@@ -403,7 +403,7 @@ def build_twin(image_paths: Any) -> tuple[str, list[list[Any]], str, str, dict[s
         confidence = extraction.field_confidence
         low_fields = extraction.low_confidence_fields
         model = metadata["model"]
-        request_note = "本次图片已完成实时云端解析"
+        request_note = f"本次图片已完成云端解析 · 已逐图核齐 {len(paths)} 张截图，共 {len(trip_payload['events'])} 项行程"
     rows = [[name, round(float(value), 3), field_description(name, trip_payload)] for name, value in sorted(confidence.items())]
     low_text = (
         "✅ 没有低于 0.8 的字段。"
@@ -422,8 +422,23 @@ def build_twin(image_paths: Any) -> tuple[str, list[list[Any]], str, str, dict[s
     }
     state["parse_summary"] = f"`{model}` · {request_note}"
     if not _is_functional_example(paths):
+        report = metadata.get("image_report") or []
+        expected = set(range(1, len(paths) + 1))
+        if len(paths) > 1 and (
+            len(report) != len(paths) or {item.get("image_index") for item in report} != expected
+            or any(not item.get("event_indices") for item in report)
+        ):
+            raise gr.Error("多图解析未逐张核齐，已停止构建。请重新解析或分开上传；不能据此报告 0 风险。")
+        state["image_coverage"] = {
+            "version": 1, "image_count": len(paths), "images": report,
+        }
         state["draft_trip"] = state.pop("trip")
         state["stage"] = "needs_confirmation"
+        state["image_report_text"] = "\n\n### 截图处理核对\n" + "\n".join(
+            f"- 第 {item['image_index']} 张：对应行程 " + "、".join(str(i + 1) for i in item['event_indices'])
+            for item in report
+        )
+        low_text += state["image_report_text"]
     if not _is_functional_example(paths) and extraction.notes:
         low_text += "\n\n" + "\n".join("- " + note for note in extraction.notes)
     return (
@@ -508,6 +523,7 @@ def parse_current_import(files, privacy_confirmed, browser_store, current, reque
     if any(path.is_file() and file_digest(path) in expired for path in paths) or (
         not paths and isinstance(current.get("trip") or current.get("draft_trip"), dict)
     ):
+        _require_image_coverage(current)
         if not isinstance(current.get("trip") or current.get("draft_trip"), dict):
             raise gr.Error("这份历史行程的原图已过期，当前显示的是预览副本；尚无可复用的完整解析。请重新上传原图后解析，预览不会替代原图发送给模型。本次不消耗解析次数。")
         current["_history_cached_parse"] = True
@@ -543,6 +559,7 @@ def completion_panel(state):
 
 def confirm_import(rows, state):
     current = dict(state or {})
+    _require_image_coverage(current)
     if not isinstance(current.get("draft_trip"), dict):
         raise gr.Error("请先解析行程截图。")
     try:
@@ -656,7 +673,13 @@ def _same_image(first: Path, second: Path) -> bool:
     ).digest()
 
 
+def _require_image_coverage(state):
+    if (state or {}).get("legacy_image_coverage_missing"):
+        raise gr.Error("此历史会话由旧版多图解析生成，尚未逐张核齐，不能据此进行风险分析、Plan B 或行程问答。请点击解析重新核对所有原图；原图已过期时请重新上传。本次未调用模型或外部工具。")
+
+
 def check_risks(state: dict[str, Any], confirmed: bool) -> str:
+    _require_image_coverage(state)
     if not state or "trip" not in state:
         raise gr.Error("请先构建旅行数字孪生。")
     if state.get("low_confidence_fields") and not confirmed:
@@ -670,6 +693,7 @@ def check_risks(state: dict[str, Any], confirmed: bool) -> str:
 def generate_plan_b(
     state: dict[str, Any], confirmed: bool
 ) -> tuple[str, str, dict[str, Any], str, str]:
+    _require_image_coverage(state)
     if not state or "trip" not in state:
         raise gr.Error("请先构建旅行数字孪生。")
     if state.get("low_confidence_fields") and not confirmed:
@@ -796,6 +820,7 @@ def local_options_view(state):
 
 
 def apply_local_option(selected, state):
+    _require_image_coverage(state)
     if not isinstance((state or {}).get("trip"), dict):
         raise gr.Error("请先构建行程并生成 Plan B。")
     # Recompute from current state, never trust a candidate passed back by the UI.
@@ -837,9 +862,10 @@ def refresh_confidence(state):
     values = (state or {}).get("field_confidence") or {}
     rows = [[key, round(float(value), 3), field_description(key, state.get("trip"))] for key, value in sorted(values.items())]
     low = (state or {}).get("low_confidence_fields") or []
+    report = str((state or {}).get("image_report_text") or "")
     if (state or {}).get("recognition_confirmed"):
-        return rows, "✅ 已人工确认识别结果。表格保留原始模型置信度，人工确认不会将低分改成 1。"
-    return rows, "已确认仍存在的识别限制：" + "、".join(low) if low else "✅ 当前保留行程没有低于 0.8 的已标注字段。"
+        return rows, "✅ 已人工确认识别结果。表格保留原始模型置信度，人工确认不会将低分改成 1。" + report
+    return rows, ("已确认仍存在的识别限制：" + "、".join(low) if low else "✅ 当前保留行程没有低于 0.8 的已标注字段。") + report
 
 
 def generate_plan_b_guarded(
@@ -848,6 +874,7 @@ def generate_plan_b_guarded(
     browser_store: dict[str, Any] | None,
     request: gr.Request | None = None,
 ) -> tuple[str, str, dict[str, Any], str, str, dict[str, Any]]:
+    _require_image_coverage(state)
     if not isinstance(state, dict) or not isinstance(state.get("trip"), dict):
         raise gr.Error("请先解析截图、补全必要信息并构建旅行数字孪生。")
     if state.get("low_confidence_fields") and not confirmed:
@@ -897,6 +924,7 @@ def run_live_inspection_guarded(
     browser_store: dict[str, Any] | None,
     request: gr.Request | None = None,
 ) -> tuple[str, str, dict[str, Any], dict[str, Any]]:
+    _require_image_coverage(state)
     if not isinstance(state, dict) or not isinstance(state.get("trip"), dict):
         raise gr.Error("请先构建旅行数字孪生。")
     if state.get("low_confidence_fields") and not confirmed:
@@ -949,6 +977,7 @@ def answer_question(
     history: list[dict[str, Any]] | None,
     state: dict[str, Any],
 ) -> tuple[str, list[dict[str, Any]]]:
+    _require_image_coverage(state)
     text = (question or "").strip()
     if not text:
         raise gr.Error("请先输入问题。")
@@ -987,6 +1016,7 @@ def answer_question_guarded(
 ) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
     """Answer with browser caching and bounded daily public model usage."""
 
+    _require_image_coverage(state)
     text = (question or "").strip()
     if not text:
         raise gr.Error("请先输入问题。")
@@ -1293,6 +1323,7 @@ def _session_view(session: dict[str, Any]) -> tuple[Any, ...]:
     )
     if trip_state.get("recognition_confirmed") and isinstance(trip, dict):
         low_text = "✅ 已人工确认识别结果。表格保留原始模型置信度，人工确认不会将低分改成 1。"
+    low_text += str(trip_state.get("image_report_text") or "")
     timeline = timeline_html(trip) if isinstance(trip, dict) else ""
     safe_amap, safe_inspection = safe_context_panels(
         trip_state,
@@ -1325,6 +1356,9 @@ def _restored_history_view(session: dict[str, Any]) -> tuple[Any, ...]:
     snapshot = session.get("snapshot") or {}
     state = dict(snapshot.get("trip_state") or {})
     previews = sanitize_previews(snapshot.get("image_previews"))
+    if len(previews) > 1 and state.get("trip_source") in {"uploaded_image", "user_corrected"} and not state.get("image_coverage"):
+        state["legacy_image_coverage_missing"] = True
+        state["image_report_text"] = "\n\n⚠️ 此历史会话来自旧版多图解析，尚无逐图核对记录。请重新解析原图后再检查风险或生成 Plan B；原图已过期则需重新上传。旧结果仅供查看，不能视为已核验全部截图。"
     # Old public examples can recover previews from known assets, not arbitrary paths.
     known_paths = []
     if state.get("trip_source") == "synthetic_example":
@@ -1354,6 +1388,10 @@ def _restored_history_view(session: dict[str, Any]) -> tuple[Any, ...]:
     snapshot = {**snapshot, "trip_state": state}
     view = list(_session_view({"snapshot": snapshot}))
     view[0] = files or None
+    if state.get("legacy_image_coverage_missing"):
+        view[1] = "⚠️ 旧版多图解析尚未核齐，请重新解析。"
+        view[7] = "### ⚠️ 旧风险结果待复核\n\n原解析缺少逐图覆盖记录，不能据此报告 0 风险。请重新解析原图。"
+        view[8] = "### ⚠️ 原 Plan B 待复核\n\n请先重新解析并核齐所有图片，再生成 Plan B。"
     return (
         *view, previews,
         gr.update(value=previews_html(previews), visible=bool(previews)),
