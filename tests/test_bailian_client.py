@@ -140,3 +140,72 @@ def test_timeout_requests_interrupt_for_this_session_only():
             client.run_turn("test-session", "test", timeout_seconds=0, cancel_on_failure=True)
     assert observed[-1] == {"input": [{"role": "user", "type": "interrupt"}]}
 
+
+def test_operation_deadline_bounds_pagination_and_interrupt_has_separate_budget(monkeypatch):
+    import triptwin.bailian_client as module
+
+    clock = [0.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    observed = []
+
+    def handler(request):
+        observed.append(request)
+        if request.method == "GET":
+            clock[0] += 2
+            return httpx.Response(200, json={"events": [], "next_page": "another"})
+        return httpx.Response(200, json={"id": "interrupt-event"})
+
+    with httpx.Client(transport=httpx.MockTransport(handler), base_url="https://test.invalid") as http_client:
+        client = BailianManagedAgentClient(_settings(), client=http_client, operation_timeout_seconds=3)
+        with pytest.raises(BailianTimeoutError, match="超时"):
+            client.list_events("current-session")
+        assert len(observed) == 2  # Not fifty pages with a fresh timeout each.
+        assert observed[1].extensions["timeout"]["read"] == 1
+        client.interrupt_session("current-session")
+        assert observed[-1].extensions["timeout"]["read"] == 5
+        with pytest.raises(BailianTimeoutError):
+            client.list_events("current-session")
+        assert len(observed) == 3
+
+
+def test_transient_get_retries_share_one_deadline(monkeypatch):
+    import triptwin.bailian_client as module
+
+    clock = [0.0]
+    calls = []
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(module.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+
+    def handler(request):
+        calls.append(request)
+        clock[0] += 2
+        return httpx.Response(503)
+
+    with httpx.Client(transport=httpx.MockTransport(handler), base_url="https://test.invalid") as http_client:
+        client = BailianManagedAgentClient(_settings(), client=http_client, operation_timeout_seconds=2.25)
+        with pytest.raises(BailianTimeoutError):
+            client.list_events("current-session")
+    assert len(calls) == 1
+
+
+def test_operation_timeout_interrupts_without_resending_user_message(monkeypatch):
+    import triptwin.bailian_client as module
+
+    clock = [0.0]
+    sent = []
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+
+    def handler(request):
+        if request.method == "POST":
+            sent.append(json.loads(request.content)["input"][0]["type"])
+            return httpx.Response(200, json={"id": "event"})
+        if sent:
+            clock[0] += 4
+        return httpx.Response(200, json={"events": []})
+
+    with httpx.Client(transport=httpx.MockTransport(handler), base_url="https://test.invalid") as http_client:
+        client = BailianManagedAgentClient(_settings(), client=http_client, operation_timeout_seconds=3)
+        with pytest.raises(BailianTimeoutError, match="已提交中断请求"):
+            client.run_turn("current-session", "question", timeout_seconds=3, cancel_on_failure=True)
+    assert sent == ["message", "interrupt"]
+

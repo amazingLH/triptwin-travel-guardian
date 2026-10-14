@@ -62,7 +62,9 @@ def run_live_trip(
         destination_name=destination_name,
         inspect_only=inspect_only,
     )
-    with BailianManagedAgentClient(settings) as client:
+    # Include session creation, event pagination, GET retries and artifact
+    # download in the budget, not just the polling loop's outer condition.
+    with BailianManagedAgentClient(settings, operation_timeout_seconds=timeout_seconds) as client:
         session_id = client.create_session(
             title=f"途证哨 live {trip.trip_id}", trip_id=trip.trip_id
         )

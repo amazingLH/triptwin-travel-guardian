@@ -56,9 +56,15 @@ class BailianManagedAgentClient:
         *,
         client: httpx.Client | None = None,
         request_timeout_seconds: float = 30,
+        operation_timeout_seconds: float | None = None,
     ) -> None:
         self.settings = settings
         self._owns_client = client is None
+        self._request_timeout_seconds = request_timeout_seconds
+        self._operation_deadline = (
+            time.monotonic() + operation_timeout_seconds
+            if operation_timeout_seconds is not None else None
+        )
         self._client = client or httpx.Client(
             base_url=settings.managed_agents_base_url,
             timeout=request_timeout_seconds,
@@ -205,9 +211,16 @@ class BailianManagedAgentClient:
 
     def interrupt_session(self, session_id: str) -> None:
         """Best-effort stop for this run only; never approve tool requests."""
-        self._request("POST", f"/sessions/{session_id}/events", json={
-            "input": [{"role": "user", "type": "interrupt"}],
-        })
+        previous = self._operation_deadline
+        # Cleanup needs its own small budget after the main deadline expires.
+        # It must not add another full 30-second request (or retry the message).
+        self._operation_deadline = time.monotonic() + 5
+        try:
+            self._request("POST", f"/sessions/{session_id}/events", json={
+                "input": [{"role": "user", "type": "interrupt"}],
+            })
+        finally:
+            self._operation_deadline = previous
 
     def wait_for_completion(
         self,
@@ -283,8 +296,16 @@ class BailianManagedAgentClient:
         # Retrying a non-idempotent message after a timeout can bill twice.
         attempts = 3 if method.upper() == "GET" else 1
         for attempt in range(attempts):
+            request_kwargs = dict(kwargs)
+            if self._operation_deadline is not None:
+                remaining = self._operation_deadline - time.monotonic()
+                if remaining <= 0:
+                    raise BailianTimeoutError("本次实时核验已超时，请稍后重试；已有行程和本地检查结果仍可查看。")
+                request_kwargs["timeout"] = min(self._request_timeout_seconds, remaining)
             try:
-                response = self._client.request(method, url, **kwargs)
+                response = self._client.request(method, url, **request_kwargs)
+                if self._operation_deadline is not None and time.monotonic() >= self._operation_deadline:
+                    raise BailianTimeoutError("本次实时核验已超时，未将超时结果标为成功；已有行程仍可查看。")
                 if response.status_code not in TRANSIENT_STATUS_CODES:
                     response.raise_for_status()
                     return response
@@ -299,7 +320,10 @@ class BailianManagedAgentClient:
             except httpx.HTTPError as exc:
                 last_error = exc
             if attempt < attempts - 1:
-                time.sleep(0.5 * (2**attempt))
+                pause = 0.5 * (2**attempt)
+                if self._operation_deadline is not None:
+                    pause = min(pause, max(0, self._operation_deadline - time.monotonic()))
+                time.sleep(pause)
         raise BailianApiError(
             f"连接百炼接口失败，已尝试 {attempts} 次。请检查网络和资源配置。"
         ) from last_error

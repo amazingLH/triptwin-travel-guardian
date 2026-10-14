@@ -868,6 +868,16 @@ def refresh_confidence(state):
     return rows, ("已确认仍存在的识别限制：" + "、".join(low) if low else "✅ 当前保留行程没有低于 0.8 的已标注字段。") + report
 
 
+def render_step_panels(state):
+    """Refresh local derived controls together, without another queued job."""
+    current = state or {}
+    return (
+        *completion_panel(current),
+        *local_options_view(current),
+        gr.update(visible=isinstance(current.get("trip"), dict) or isinstance(current.get("draft_trip"), dict)),
+    )
+
+
 def generate_plan_b_guarded(
     state: dict[str, Any],
     confirmed: bool,
@@ -1421,7 +1431,7 @@ def persist_current_session(
     editor_text: str | None = None,
     completion_values: Any = None,
     question_text: str | None = None,
-) -> tuple[dict[str, Any], gr.Dropdown, str]:
+) -> tuple[Any, ...]:
     snapshot = _session_snapshot(
         trip_state,
         status,
@@ -1436,7 +1446,10 @@ def persist_current_session(
     )
     store = save_active_session(browser_store, snapshot)
     session = next(item for item in store["sessions"] if item["id"] == store["active_id"])
-    return store, _history_update(store), _session_badge(session)
+    # Return the browser mirror and local controls explicitly. Non-queued
+    # callbacks do not consistently dispatch State.change in Gradio's client;
+    # relying on those events loses history or leaves stale derived controls.
+    return store, _history_update(store), _session_badge(session), store, *render_step_panels(snapshot["trip_state"])
 
 
 def create_new_history_session(
@@ -1621,6 +1634,7 @@ def create_app() -> gr.Blocks:
                     interactive=False,
                     label="字段置信度",
                     max_height=240,
+                    elem_id="field-confidence",
                 )
             low_confidence = gr.Markdown("尚未解析。")
             confirmed = gr.Checkbox(label="我已核对并确认低置信字段")
@@ -1639,10 +1653,10 @@ def create_app() -> gr.Blocks:
                 apply_local_button = gr.Button("应用到当前行程 · 不执行实际退改", variant="primary")
             with gr.Accordion("查看工具证据与实时巡检", open=False):
                 inspect_button = gr.Button("查看 / 执行实时巡检", variant="secondary")
-                gr.Markdown("用户行程首次执行会调用高德并计入实时核验次数；1 小时内复用已有核验，过期后再次执行仍受每日额度限制。单段交通或同站衔接不查询跨城公交。功能示例仅查看已有演示证据或本地复检；本页面不会自动后台巡检。")
-                amap_status = gr.Markdown(EMPTY_AMAP_STATUS)
-                inspection_status = gr.Markdown(EMPTY_INSPECTION_STATUS)
-                trace = gr.Markdown("### Agent 工具执行轨迹摘要\n\n等待生成。")
+                gr.Markdown("用户行程首次执行会调用高德并计入实时核验次数；1 小时内复用已有核验，过期后再次执行仍受每日额度限制。单段交通或同站衔接不查询跨城公交。云端核验可能需要数分钟，超时会提示失败，已生成内容仍可查看，请勿连续重复点击。功能示例仅查看已有演示证据或本地复检；本页面不会自动后台巡检。")
+                amap_status = gr.Markdown(EMPTY_AMAP_STATUS, elem_id="amap-evidence")
+                inspection_status = gr.Markdown(EMPTY_INSPECTION_STATUS, elem_id="inspection-evidence")
+                trace = gr.Markdown("### Agent 工具执行轨迹摘要\n\n等待生成。", elem_id="tool-trace")
         with gr.Column(elem_id="step-chat", elem_classes=["step-card"]):
             gr.HTML("<div class='step-heading'><span class='step-number'>5</span><div><h2>提问与导出</h2><p>针对当前行程提问，或导出 JSON 与日历文件保存结果。</p></div></div>")
             with gr.Column(elem_classes=["guide-card"]):
@@ -1696,6 +1710,10 @@ def create_app() -> gr.Blocks:
             question,
         ]
         session_outputs = [history_store, history_select, session_badge]
+        persist_outputs = [
+            *session_outputs, browser_store, completion_section, completion_table,
+            completion_message, local_options_section, local_choice, editor_section,
+        ]
         view_outputs = [
             image,
             status,
@@ -1724,14 +1742,22 @@ def create_app() -> gr.Blocks:
             local_choice,
         ]
 
+        # Local rendering/persistence must not depend on the queue's SSE stream.
+        # In particular, a background history write must never mask an already
+        # rendered confidence table or tool evidence with a full loading overlay.
+        local_event = {"queue": False, "show_progress": "hidden"}
+        # Keep user actions which can raise gr.Error on the queued transport:
+        # this Gradio release drops toast metadata on direct HTTP failures.
+        # Their progress is scoped to one small area, never the whole view.
+        work_event = {"queue": True, "show_progress": "minimal", "trigger_mode": "once"}
         demo.load(
             initialize_session_history,
             inputs=[browser_store],
             outputs=[*session_outputs, *view_outputs],
-        )
-        history_store.change(
+            **local_event,
+        ).success(
             lambda current: current, inputs=history_store, outputs=browser_store,
-            api_name=False,
+            api_name=False, **local_event,
         )
         import_outputs = [
             state, amap_status, inspection_status, privacy_confirmed, status,
@@ -1740,8 +1766,8 @@ def create_app() -> gr.Blocks:
         ]
         downstream_outputs = [risks, plan_b, trace, chatbot, question, export_files]
         load_event = single_example_button.click(
-            reset_import_view, outputs=import_outputs, api_name=False,
-        ).then(load_example, outputs=[image, status, state], api_name="load_example")
+            reset_import_view, outputs=import_outputs, api_name=False, **local_event,
+        ).success(load_example, outputs=[image, status, state], api_name="load_example", **local_event)
         def capture_import_preview(files, current):
             paths = _image_paths(files)
             photos = []
@@ -1758,40 +1784,42 @@ def create_app() -> gr.Blocks:
         # Only actual upload/delete/clear actions capture new media. Restoring a
         # session programmatically must not clear its saved previews/results.
         for event in (image.upload, image.clear, image.delete):
-            event(reset_import_for_files, inputs=[image, state], outputs=import_outputs, api_name=False).then(
-                capture_import_preview, inputs=[image, state], outputs=[preview, image_previews], api_name=False,
-            ).then(persist_current_session, inputs=session_inputs, outputs=session_outputs)
-        load_context_event = load_event.then(
+            event(reset_import_for_files, inputs=[image, state], outputs=import_outputs, api_name=False, **local_event).success(
+                capture_import_preview, inputs=[image, state], outputs=[preview, image_previews], api_name=False, **local_event,
+            ).success(persist_current_session, inputs=session_inputs, outputs=persist_outputs, api_name=False, **local_event)
+        load_context_event = load_event.success(
             context_panels_for_state,
             inputs=state,
             outputs=[amap_status, inspection_status],
+            **local_event,
         )
         for button, kind in ((multi_example_button, "multi"), (conflict_example_button, "conflict")):
             def make_loader(selected):
                 def loader():
                     return load_railway_example(selected)
                 return loader
-            selected_event = button.click(reset_import_view, outputs=import_outputs, api_name=False).then(
-                make_loader(kind), outputs=[image, status, state], api_name=False,
+            selected_event = button.click(reset_import_view, outputs=import_outputs, api_name=False, **local_event).success(
+                make_loader(kind), outputs=[image, status, state], api_name=False, **local_event,
             )
-            selected_event.then(context_panels_for_state, inputs=state, outputs=[amap_status, inspection_status]).then(
-                capture_import_preview, inputs=[image, state], outputs=[preview, image_previews], api_name=False,
-            ).then(
-                persist_current_session, inputs=session_inputs, outputs=session_outputs,
+            selected_event.success(context_panels_for_state, inputs=state, outputs=[amap_status, inspection_status], **local_event).success(
+                capture_import_preview, inputs=[image, state], outputs=[preview, image_previews], api_name=False, **local_event,
+            ).success(
+                persist_current_session, inputs=session_inputs, outputs=persist_outputs, api_name=False, **local_event,
             )
-        clear_import_button.click(lambda: None, outputs=image, api_name=False).then(
-            reset_import_view, outputs=import_outputs,
-        ).then(completion_panel, inputs=state, outputs=[completion_section, completion_table, completion_message]).then(
-            capture_import_preview, inputs=[image, state], outputs=[preview, image_previews], api_name=False,
-        ).then(
-            persist_current_session, inputs=session_inputs, outputs=session_outputs,
+        clear_import_button.click(lambda: None, outputs=image, api_name=False, **local_event).success(
+            reset_import_view, outputs=import_outputs, **local_event,
+        ).success(
+            capture_import_preview, inputs=[image, state], outputs=[preview, image_previews], api_name=False, **local_event,
+        ).success(
+            persist_current_session, inputs=session_inputs, outputs=persist_outputs, api_name=False, **local_event,
         )
-        load_context_event.then(
-            capture_import_preview, inputs=[image, state], outputs=[preview, image_previews], api_name=False,
-        ).then(
+        load_context_event.success(
+            capture_import_preview, inputs=[image, state], outputs=[preview, image_previews], api_name=False, **local_event,
+        ).success(
             persist_current_session,
             inputs=session_inputs,
-            outputs=session_outputs,
+            outputs=persist_outputs, api_name=False,
+            **local_event,
         )
         build_event = build_button.click(
             parse_current_import,
@@ -1805,46 +1833,52 @@ def create_app() -> gr.Blocks:
                 history_store,
             ],
             api_name=False,
-        ).then(
+            show_progress_on=[status], **work_event,
+        ).success(
             lambda current: (
                 "✅ 截图已解析，等待补全并确认；" if current.get("draft_trip") else "✅ TripGraph 已构建；"
             ) + str(current.get("parse_summary", "")),
             inputs=[state],
             outputs=status,
-        ).then(reset_after_parse, inputs=state, outputs=[*downstream_outputs, confirmed], api_name=False)
-        build_event.then(completion_panel, inputs=state, outputs=[completion_section, completion_table, completion_message])
+            **local_event,
+        ).success(reset_after_parse, inputs=state, outputs=[*downstream_outputs, confirmed], api_name=False, **local_event)
         confirm_import_button.click(
             confirm_import, inputs=[completion_table, state],
             outputs=[status, timeline, state, trip_json, confirmed], api_name=False,
-        ).then(reset_downstream_view, outputs=downstream_outputs, api_name=False).then(refresh_confidence, inputs=state, outputs=[confidence, low_confidence]).then(completion_panel, inputs=state, outputs=[completion_section, completion_table, completion_message]).then(
-            context_panels_for_state, inputs=state, outputs=[amap_status, inspection_status],
-        ).then(persist_current_session, inputs=session_inputs, outputs=session_outputs)
-        build_context_event = build_event.then(
+            show_progress_on=[status], **work_event,
+        ).success(reset_downstream_view, outputs=downstream_outputs, api_name=False, **local_event).success(refresh_confidence, inputs=state, outputs=[confidence, low_confidence], **local_event).success(
+            context_panels_for_state, inputs=state, outputs=[amap_status, inspection_status], **local_event,
+        ).success(persist_current_session, inputs=session_inputs, outputs=persist_outputs, api_name=False, **local_event)
+        build_context_event = build_event.success(
             context_panels_for_state,
             inputs=state,
             outputs=[amap_status, inspection_status],
+            **local_event,
         )
-        build_context_event.then(
+        build_context_event.success(
             persist_current_session,
             inputs=session_inputs,
-            outputs=session_outputs,
+            outputs=persist_outputs, api_name=False,
+            **local_event,
         )
         edit_event = apply_edits_button.click(
             apply_tripgraph_edits,
             inputs=[trip_json, state],
             outputs=[trip_json, timeline, state, status, confirmed],
             api_name=False,
-        ).then(reset_downstream_view, outputs=downstream_outputs, api_name=False)
-        edit_event.then(
+            show_progress_on=[status], **work_event,
+        ).success(reset_downstream_view, outputs=downstream_outputs, api_name=False, **local_event)
+        edit_event.success(
             context_panels_for_state,
             inputs=state,
             outputs=[amap_status, inspection_status],
-        ).then(
+            **local_event,
+        ).success(
             persist_current_session,
             inputs=session_inputs,
-            outputs=session_outputs,
+            outputs=persist_outputs, api_name=False,
+            **local_event,
         )
-        edit_event.then(completion_panel, inputs=state, outputs=[completion_section, completion_table, completion_message])
         def export_callback(current):
             return export_current_trip(current, cache_root=export_files.GRADIO_CACHE)
         export_button.click(
@@ -1852,127 +1886,144 @@ def create_app() -> gr.Blocks:
             inputs=[state],
             outputs=[export_files],
             api_name=False,
+            show_progress_on=[export_files], **work_event,
         )
         check_event = check_button.click(
             check_risks,
             inputs=[state, confirmed],
             outputs=risks,
             api_name="check_risks",
+            show_progress_on=[risks], **work_event,
         )
-        check_event.then(
+        check_event.success(
             persist_current_session,
             inputs=session_inputs,
-            outputs=session_outputs,
+            outputs=persist_outputs, api_name=False,
+            **local_event,
         )
         recheck_event = recheck_button.click(
-            check_risks, inputs=[state, confirmed], outputs=risks
+            check_risks, inputs=[state, confirmed], outputs=risks,
+            show_progress_on=[risks], **work_event,
         )
-        recheck_event.then(
+        recheck_event.success(
             persist_current_session,
             inputs=session_inputs,
-            outputs=session_outputs,
+            outputs=persist_outputs, api_name=False,
+            **local_event,
         )
         plan_event = plan_button.click(
             generate_plan_b_guarded,
             inputs=[state, confirmed, history_store],
             outputs=[plan_b, trace, state, amap_status, inspection_status, history_store],
             api_name=False,
+            show_progress_on=[plan_b], **work_event,
         )
-        plan_render_event = plan_event.then(
+        plan_render_event = plan_event.success(
             render_state_trip,
             inputs=[state],
             outputs=[trip_json, timeline],
-        ).then(check_risks, inputs=[state, confirmed], outputs=risks, api_name=False)
-        plan_render_event.then(
+            **local_event,
+        ).success(check_risks, inputs=[state, confirmed], outputs=risks, api_name=False,
+                  show_progress_on=[risks], **work_event)
+        plan_render_event.success(
             persist_current_session,
             inputs=session_inputs,
-            outputs=session_outputs,
+            outputs=persist_outputs, api_name=False,
+            **local_event,
         )
-        plan_event.then(local_options_view, inputs=state, outputs=[local_options_section, local_choice])
+        plan_event.success(local_options_view, inputs=state, outputs=[local_options_section, local_choice], **local_event)
         apply_local_button.click(
             apply_local_option, inputs=[local_choice, state],
             outputs=[trip_json, timeline, risks, state, plan_b, status, confirmed], api_name=False,
-        ).then(lambda: ([], "", None), outputs=[chatbot, question, export_files], api_name=False).then(refresh_confidence, inputs=state, outputs=[confidence, low_confidence]).then(
-            context_panels_for_state, inputs=state, outputs=[amap_status, inspection_status],
-        ).then(
-            persist_current_session, inputs=session_inputs, outputs=session_outputs,
+            show_progress_on=[status], **work_event,
+        ).success(lambda: ([], "", None), outputs=[chatbot, question, export_files], api_name=False, **local_event).success(refresh_confidence, inputs=state, outputs=[confidence, low_confidence], **local_event).success(
+            context_panels_for_state, inputs=state, outputs=[amap_status, inspection_status], **local_event,
+        ).success(
+            persist_current_session, inputs=session_inputs, outputs=persist_outputs, api_name=False, **local_event,
         )
         inspect_event = inspect_button.click(
             run_live_inspection_guarded,
             inputs=[state, confirmed, history_store],
             outputs=[amap_status, inspection_status, state, history_store],
             api_name=False,
+            show_progress_on=[trace], **work_event,
         )
-        inspect_render_event = inspect_event.then(
+        inspect_render_event = inspect_event.success(
             render_state_trip,
             inputs=[state],
             outputs=[trip_json, timeline],
-        ).then(check_risks, inputs=[state, confirmed], outputs=risks, api_name=False).then(
-            current_tool_trace, inputs=state, outputs=trace, api_name=False,
+            **local_event,
+        ).success(check_risks, inputs=[state, confirmed], outputs=risks, api_name=False,
+                  show_progress_on=[risks], **work_event).success(
+            current_tool_trace, inputs=state, outputs=trace, api_name=False, **local_event,
         )
-        inspect_render_event.then(
+        inspect_render_event.success(
             persist_current_session,
             inputs=session_inputs,
-            outputs=session_outputs,
+            outputs=persist_outputs, api_name=False,
+            **local_event,
         )
         ask_event = ask_button.click(
             answer_question_guarded,
             inputs=[question, chatbot, state, history_store],
             outputs=[question, chatbot, history_store],
             api_name=False,
+            show_progress_on=[chatbot], **work_event,
         )
-        ask_event.then(
+        ask_event.success(
             persist_current_session,
             inputs=session_inputs,
-            outputs=session_outputs,
+            outputs=persist_outputs, api_name=False,
+            **local_event,
         )
         submit_event = question.submit(
             answer_question_guarded,
             inputs=[question, chatbot, state, history_store],
             outputs=[question, chatbot, history_store],
             api_name=False,
+            show_progress_on=[chatbot], **work_event,
         )
-        submit_event.then(
+        submit_event.success(
             persist_current_session,
             inputs=session_inputs,
-            outputs=session_outputs,
+            outputs=persist_outputs, api_name=False,
+            **local_event,
         )
         new_session_button.click(
             create_new_history_session,
             inputs=session_inputs,
             outputs=[*session_outputs, *view_outputs],
             api_name="new_session",
-        )
+            show_progress_on=[session_badge], **work_event,
+        ).success(lambda current: current, inputs=history_store, outputs=browser_store, api_name=False, **local_event)
         history_select.input(
             open_history_session,
             inputs=[history_select, *session_inputs],
             outputs=[*session_outputs, *view_outputs],
             api_name=False,
             trigger_mode="always_last",
-        )
+            queue=True, show_progress="minimal", show_progress_on=[session_badge],
+        ).success(lambda current: current, inputs=history_store, outputs=browser_store, api_name=False, **local_event)
         delete_session_button.click(
             delete_current_history_session,
             inputs=[history_store],
             outputs=[*session_outputs, *view_outputs],
             api_name=False,
-        )
+            show_progress_on=[session_badge], **work_event,
+        ).success(lambda current: current, inputs=history_store, outputs=browser_store, api_name=False, **local_event)
         clear_sessions_button.click(
             clear_all_history_sessions,
             inputs=[history_store],
             outputs=[*session_outputs, *view_outputs],
             api_name=False,
-        )
+            show_progress_on=[session_badge], **work_event,
+        ).success(lambda current: current, inputs=history_store, outputs=browser_store, api_name=False, **local_event)
         for component in (trip_json, completion_table):
             component.input(
-                persist_current_session, inputs=session_inputs, outputs=session_outputs,
+                persist_current_session, inputs=session_inputs, outputs=persist_outputs,
                 api_name=False, trigger_mode="always_last",
+                **local_event,
             )
-        state.change(completion_panel, inputs=state, outputs=[completion_section, completion_table, completion_message], api_name=False)
-        state.change(local_options_view, inputs=state, outputs=[local_options_section, local_choice], api_name=False)
-        state.change(
-            lambda current: gr.update(visible=isinstance((current or {}).get("trip"), dict) or isinstance((current or {}).get("draft_trip"), dict)),
-            inputs=state, outputs=editor_section, api_name=False,
-        )
     return demo
 
 
