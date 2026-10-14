@@ -71,7 +71,7 @@
 
 ### 已验证范围
 
-截至 2026-10-14，应用代码基线为 `596bcc7f08df3b7c7c0bfbe8280a0f0fe5ef8fb3`，本地自动化测试 164 项通过、离线评测 2 个案例通过，静态和编译检查通过。最新加载修复通过桌面两轮、390px 手机宽度一轮浏览器回归，覆盖错误提示、慢请求时面板可读、重复点击、连接失败重试与历史刷新。历史版本另已完成会话切换、截图预览、行程、风险、Plan B、对话恢复，以及服务重启后的历史读取。多图修复通过模拟 HTTP 响应覆盖“组装多图请求→逐图结果→合并→补全→风险与局部 Plan B”；作者已确认前一基线 `a3c624e` 部署后真实双图显示两段并检出重叠。2026-10-14 作者确认最新加载修复已重新部署，公网复测结论仍待反馈，不将部署完成或本地结果冒充公网验收通过。
+截至 2026-10-14，应用代码基线为 `5a23154b2c0525de375ec0832b1ef17a8fef4ffd`，本地自动化测试 171 项通过、离线评测 2 个案例通过，静态和编译检查通过。桌面及 390px 手机宽度回归覆盖未应用方案在巡检后保留、当前选择恢复、局部加载条秒数递增、错误提示、失败重试及历史刷新；新实时核验分支使用模拟结果验证，不冒充新付费调用。历史版本另完成会话切换、截图预览、行程、风险、Plan B、对话恢复及服务重启后的历史读取。多图修复通过模拟 HTTP 覆盖“请求→逐图结果→合并→补全→风险与局部 Plan B”；作者确认 `a3c624e` 真实双图均显示且检出重叠，并确认前轮 `596bcc7` 已重新部署。最新 `5a23154` 补丁仍待部署及公网复测，不将旧版本确认或本地结果冒充最新公网验收。
 
 历史黄金图片评测中，47 个可见字段有 46 个与标准答案一致；这是单一样例结果，不将其写成所有车票的总体识别准确率。最新公网部署与验收结果以作者最终测试为准。
 
@@ -79,8 +79,8 @@
 
 - 在线应用：[ModelScope · 途证哨](https://modelscope.cn/studios/L666H666Better/triptwin-travel-guardian)
 - 源码仓库：[GitHub · tuzhengguard-travel-guardian](https://github.com/amazingLH/tuzhengguard-travel-guardian)
-- 应用代码基线：[596bcc7](https://github.com/amazingLH/tuzhengguard-travel-guardian/tree/596bcc7f08df3b7c7c0bfbe8280a0f0fe5ef8fb3)（后续仅补充文档的提交不改变此应用基线）。
-- 本地配置与运行：[README](https://github.com/amazingLH/tuzhengguard-travel-guardian/blob/596bcc7f08df3b7c7c0bfbe8280a0f0fe5ef8fb3/README.md)。真实调用需配置自己的百炼、Managed Agent 和 FlyAI 凭据，不共享部署者密钥。
+- 应用代码基线：[5a23154](https://github.com/amazingLH/tuzhengguard-travel-guardian/tree/5a23154b2c0525de375ec0832b1ef17a8fef4ffd)（后续仅补充文档的提交不改变此应用基线）。
+- 本地配置与运行：[README](https://github.com/amazingLH/tuzhengguard-travel-guardian/blob/5a23154b2c0525de375ec0832b1ef17a8fef4ffd/README.md)。真实调用需配置自己的百炼、Managed Agent 和 FlyAI 凭据，不共享部署者密钥。
 
 ### 评委快速体验
 
