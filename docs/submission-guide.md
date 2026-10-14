@@ -2,6 +2,12 @@
 
 更新日期：2026-10-14。作者已确认最新版本重新部署、复测未发现 bug；当前进入**阶段 8：效果截图、材料定稿与正式提交**。不再默认扩充功能，也不为了改文档反复部署。部署成功、核心复测通过、正式报名和提交成功分别记录。
 
+## 先弄清提交的是什么
+
+**不用新建仓库。** [现有 GitHub 仓库](https://github.com/amazingLH/tuzhengguard-travel-guardian) 就是作品源码地址，[现有 ModelScope 网站](https://modelscope.cn/studios/L666H666Better/triptwin-travel-guardian) 就是在线体验地址，两者继续使用。
+
+还要做的是在**主办方的仓库**发布一篇参赛作品 Issue（作品展示帖，不是新仓库，也不是要求报告 bug）。帖中放项目介绍、作者、百炼使用、效果截图、源码链接和体验链接。[submission-draft.md](submission-draft.md) 已将这些内容写好，图片也已嵌入，无需另做压缩包或重复上传代码。
+
 ## 1. 本轮部署与核心复测已确认
 
 2026-10-14，作者反馈“重新部署了，没有bug”。据此将应用基线 `5a23154`（交付快照 `bd26fee`）的本轮部署与核心复测记为作者确认通过。不需要再为材料重复跑一整轮相同测试；未逐项报告的边界测试保留原记录，不冒充代理独立公网验收。
@@ -15,22 +21,23 @@
 - 2026-10-14 已收到八张附件，选用第 3、4、5、6 张原图，分别展示三段行程与置信度、1 个重叠风险、两个 Plan B 对比、应用后的风险变化。**无需再补同一组截图，也无需自行上传图床。**
 - 四张已检查可见隐私、核对金额与状态，保存至 `docs/evidence/stage8-public/` 并嵌入正文，使用固定提交下的公开图片地址；文件与完整性记录见 [截图索引](evidence/stage8-public/README.md)。未公开会话标识页面及无关附件。
 - 本轮截图明确为本地功能示例，不冒充新的视觉识别或实时工具调用；正文另保留带日期的历史真实工具截图，不将历史价格或房态描述为当前结果。封面图不是实际运行证据。
-- 核对唯一主要提交人及奖品领取人是否为 `amazingLH`。不要公开手机号、收货地址、密钥、乘客与订单信息。
+- 作者栏使用“项目名称：途证哨；主要提交人 GitHub ID：amazingLH；其他成员：无”。不要公开手机号、收货地址、密钥、乘客与订单信息。
 - 模型默认名与百炼控制台当前配置分开写；如部署已覆盖默认值，按实际配置改，不猜测当前模型或智能模式。
 
 材料与截图已整理完毕，下一步是作者核对身份 / 报名并正式提交，而不是重新开发或部署。提交后在 `release-record.md` 保存正式回执。复制正文的 Markdown 原文到 Issue 后，先在预览中确认四张图片可见，不要只复制本机文件路径。
 
 按 [官方 Issue 模板](https://github.com/modelstudioai/modelstudioai.github.io/blob/main/.github/ISSUE_TEMPLATE/fliggy-ai-travel-innovation-2026.md)，效果展示至少有一张实际运行截图、成片或演示视频。**视频可选，不是所有作品都必须再录一份**；只给公网 URL 则不能代替效果展示。
 
-## 3. 核对报名，再正式提交作品
+## 3. 按网址操作：复制正文 → 发布作品帖
 
-1. 查看 [大赛官网](https://opc.aliyun.com/feizhu) 的报名意向 / 参赛入口及 [官方参赛指南](https://alidocs.dingtalk.com/i/nodes/QG53mjyd800agdlKHebwk4Zj86zbX04v)，核对已有报名回执、赛道和账号。已完成的不要重复登记；本地没有回执不等于你一定未报名。指南内容或入口变化以当前官方页面为准。
-2. 打开 [官方作品 Issue 入口](https://github.com/modelstudioai/modelstudioai.github.io/issues/new?template=fliggy-ai-travel-innovation-2026.md)。使用本人的主要提交账号，标题建议为：
+1. 用 `amazingLH` 登录 GitHub，打开 [最终正文纯文本](https://raw.githubusercontent.com/amazingLH/tuzhengguard-travel-guardian/main/docs/submission-draft.md)，全选并复制。这里复制的是 Markdown 原文，包含图片地址，不需要自己再插图。
+2. 打开 [官方作品 Issue 入口](https://github.com/modelstudioai/modelstudioai.github.io/issues/new?template=fliggy-ai-travel-innovation-2026.md)。这是主办方 `modelstudioai/modelstudioai.github.io` 仓库的作品收集页面，不是你自己仓库的 Issues。标题填写：
 
    `【2026飞猪AI旅行创新大赛】途证哨 TuzhengGuard · 旅行数字孪生守护者`
 
-3. 将正文草稿对应内容填入模板；正文已包含四张最新截图及公开地址，无需重复上传。预览并检查图片、源码与 Demo 均无需评委申请权限。公开作品描述可以较完整，但不要公开凭据。
-4. 人工确认后点击提交，保存 Issue URL、编号与提交日期；同时保存报名入口的回执（若该入口要求另行登记）。发布 Issue 不自动证明其他报名步骤已完成。
+3. 在正文编辑区全选模板预填文字，用刚复制的最终正文整体替换，避免留下模板注释或重复段落；保留页面已设置的赛事标签。切到预览，确认作者为 `amazingLH`、四张最新截图可见，源码和 Demo 链接正确。
+4. 检查后点击页面的发布 / 提交按钮。发布成功后，将新作品帖的网址发回当前项目聊天，补记 Issue 编号及提交日期。若已经发布过同一作品，编辑原帖，不重复创建。
+5. 打开 [大赛官网](https://opc.aliyun.com/feizhu)，在赛程安排区域核对“提交报名意向 / 选赛道、加入赛事群”对应流程及 [官方参赛指南](https://alidocs.dingtalk.com/i/nodes/QG53mjyd800agdlKHebwk4Zj86zbX04v)。已报名的无需重复；未完成的按官方入口补齐。发布作品帖不自动证明报名登记已完成。
 
 此轮只准备材料，不代替作者点击官方发布或报名。不要重复创建同一作品的 Issue；已有作品应更新原帖。
 
