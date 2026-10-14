@@ -13,12 +13,19 @@ def test_render_and_save_callbacks_never_queue_or_cover_existing_results():
         app.open_history_session, app.delete_current_history_session, app.clear_all_history_sessions,
     }
     for dependency in app.demo.config["dependencies"]:
-        callback = app.demo.fns[dependency["id"]].fn
+        bound_callback = app.demo.fns[dependency["id"]].fn
+        callback = getattr(bound_callback, "__wrapped__", bound_callback)
         if callback in work or callback.__name__ == "export_callback":
             assert dependency["queue"] is True
-            assert dependency["show_progress"] == "minimal"
             assert len(dependency["show_progress_on"]) == 1
             assert dependency["trigger_mode"] in {"once", "always_last"}
+            if hasattr(bound_callback, "__wrapped__"):
+                assert dependency["show_progress"] == "full"
+                target = next(c for c in app.demo.config["components"] if c["id"] == dependency["show_progress_on"][0])
+                assert "operation-progress" in target["props"]["elem_classes"]
+                assert target["id"] in dependency["outputs"]
+            else:
+                assert dependency["show_progress"] == "minimal"
         else:
             assert dependency["queue"] is False
             assert dependency["show_progress"] == "hidden"
@@ -29,7 +36,14 @@ def test_failed_workflows_do_not_run_render_reset_or_save_followups():
 
     for dependency in app.demo.config["dependencies"]:
         if dependency["trigger_after"] is not None:
-            assert dependency["trigger_only_on_success"] is True
+            if dependency["trigger_only_on_failure"]:
+                assert dependency["queue"] is False
+                assert dependency["show_progress"] == "hidden"
+                for identifier in dependency["outputs"]:
+                    component = next(c for c in app.demo.config["components"] if c["id"] == identifier)
+                    assert "operation-progress" in component["props"]["elem_classes"]
+            else:
+                assert dependency["trigger_only_on_success"] is True
 
 
 def test_background_state_events_are_replaced_by_explicit_snapshot_outputs():
@@ -64,3 +78,30 @@ def test_autosave_keeps_user_completion_values_instead_of_resetting_inputs():
     )
     assert result[5] == rows
     assert result[3]["sessions"][0]["snapshot"]["trip_state"]["completion_rows"] == rows
+
+
+def test_timed_operation_reports_real_execution_duration_and_propagates_error(monkeypatch):
+    import app
+    import pytest
+
+    moments = iter([10, 12.125])
+    monkeypatch.setattr(app.time, "perf_counter", lambda: next(moments))
+    callback = app.timed_operation(lambda: ("result", {"state": "kept"}), "检查")
+    result = callback()
+    assert result[:2] == ("result", {"state": "kept"})
+    assert "2.12 秒" in result[-1]
+    monkeypatch.setattr(app.time, "perf_counter", lambda: 10)
+    def failed():
+        raise app.gr.Error("请先输入预算")
+    with pytest.raises(app.gr.Error, match="请先输入预算"):
+        app.timed_operation(failed, "构建")()
+
+
+def test_timing_wrapper_keeps_request_injection_for_usage_guards():
+    import app
+    from gradio.helpers import special_args
+
+    request = app.gr.Request()
+    wrapped = app.timed_operation(app.run_live_inspection_guarded, "巡检")
+    arguments, _, _, _ = special_args(wrapped, [{}, True, {}], request=request)
+    assert arguments[-1] is request

@@ -56,6 +56,7 @@ const mobile = process.argv.includes("--mobile");
     await click("③ 检查风险");
     await contains("请先构建旅行数字孪生");
     await settled();
+    assert.ok((await page.locator("#risk-progress").innerText()).includes("未完成"));
     assert.equal(await page.locator(".generating,.pending").count(), 0);
 
     await page.getByText("行程功能示例", { exact: true }).click();
@@ -81,11 +82,29 @@ const mobile = process.argv.includes("--mobile");
     await click("④ 生成 Plan B");
     await page.getByText("选择保留的行程方案", { exact: true }).waitFor();
     await settled();
+    await page.locator("#local-plan-choice input").click();
+    await page.getByRole("option").nth(1).click();
+    await settled();
+    const pendingChoice = await page.locator("#local-plan-choice input").inputValue();
+    await page.getByText("查看工具证据与实时巡检", { exact: true }).click();
+    await click("查看 / 执行实时巡检");
+    await contains("行程巡检完成 · 执行耗时");
+    await settled();
+    assert.equal(await page.getByText("选择保留的行程方案", { exact: true }).count(), 1);
+    assert.equal(await page.locator("#local-plan-choice input").inputValue(), pendingChoice);
+    assert.ok((await page.locator("body").innerText()).includes("检出 1 个风险"));
+    await click("③ 检查风险");
+    await settled();
+    assert.equal(await page.locator("#local-plan-choice input").inputValue(), pendingChoice);
+    assert.ok((await page.locator("#risk-progress").innerText()).includes("执行耗时"));
+    const beforeHeldInspection = posts.filter((id) => id === inspectFn).length;
     await click("应用到当前行程 · 不执行实际退改");
     await contains("本地风险 1 → 0");
     await settled();
     assert.equal(await page.getByText("选择保留的行程方案", { exact: true }).count(), 0);
-    await page.getByText("查看工具证据与实时巡检", { exact: true }).click();
+    if (!(await page.getByRole("button", { name: "查看 / 执行实时巡检", exact: true }).isVisible())) {
+      await page.getByText("查看工具证据与实时巡检", { exact: true }).click();
+    }
 
     // Artificially delay queue admission, without making a paid request.
     // The already loaded confidence/evidence must remain readable meanwhile.
@@ -104,15 +123,24 @@ const mobile = process.argv.includes("--mobile");
     assert.ok(held, JSON.stringify({ inspectFn, recentRequests: posts.slice(-20) }));
     await page.getByRole("button", { name: "查看 / 执行实时巡检", exact: true }).evaluate((el) => el.click());
     await page.waitForTimeout(700);
+    const firstTimer = (await page.locator("#inspect-progress").innerText()).match(/(\d+(?:\.\d+)?)s\b/);
+    assert.ok(firstTimer, "The scoped loading strip must show elapsed time");
+    await page.waitForTimeout(500);
+    const nextTimer = (await page.locator("#inspect-progress").innerText()).match(/(\d+(?:\.\d+)?)s\b/);
+    assert.ok(nextTimer && Number(nextTimer[1]) > Number(firstTimer[1]), "Loading time must advance");
+    if (process.env.TUZHENGGUARD_PROGRESS_SCREENSHOT) {
+      await page.locator("#inspect-progress").screenshot({ path: process.env.TUZHENGGUARD_PROGRESS_SCREENSHOT });
+    }
     for (const id of ["field-confidence", "amap-evidence", "inspection-evidence"]) {
       assert.equal(await page.locator(`#${id} .generating,#${id} .pending`).count(), 0);
       assert.ok((await page.locator(`#${id}`).innerText()).trim());
     }
-    assert.equal(posts.filter((id) => id === inspectFn).length, 1, "Repeated click submitted twice");
+    assert.equal(posts.filter((id) => id === inspectFn).length - beforeHeldInspection, 1, "Repeated click submitted twice");
     releaseInspection();
     await contains("本地确定性规则：0 个风险");
     await settled();
     await page.unroute("**/queue/join*");
+    assert.ok((await page.locator("#inspect-progress").innerText()).includes("执行耗时"));
 
     // A failed queue connection must preserve results and permit explicit retry.
     await page.route("**/queue/join*", (route) => route.abort("failed"));
@@ -129,7 +157,7 @@ const mobile = process.argv.includes("--mobile");
     assert.ok((await page.locator("body").innerText()).includes("检出 0 个风险"));
     assert.equal(await page.locator(".generating,.pending").count(), 0);
     assert.deepEqual(pageErrors, []);
-    console.log(JSON.stringify({ passed: true, viewport: mobile ? "390px" : "desktop", scenarios: ["validation-error", "parse-risk-plan-apply", "slow-request-readable-panels", "duplicate-click", "network-failure-retry", "history-reload"], paid_cloud_calls: 0 }));
+    console.log(JSON.stringify({ passed: true, viewport: mobile ? "390px" : "desktop", scenarios: ["validation-error", "pending-plan-survives-inspection", "selected-option-preserved", "parse-risk-plan-apply", "live-elapsed-timer", "slow-request-readable-panels", "duplicate-click", "network-failure-retry", "history-reload"], paid_cloud_calls: 0 }));
   } finally {
     releaseInspection?.();
     await browser.close();

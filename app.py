@@ -8,6 +8,8 @@ import json
 import os
 import tempfile
 import sys
+import time
+from functools import wraps
 from html import escape
 from urllib.parse import quote
 from pathlib import Path
@@ -124,6 +126,8 @@ APP_CSS = """
 .step-card {scroll-margin-top:20px}
 #step-plan table td:nth-last-child(-n+2) {white-space:nowrap}
 .session-bar {align-items:center!important}.session-bar button {min-height:38px!important}
+.operation-progress {min-height:42px!important;border:1px solid #d9e4f4!important;border-radius:9px!important;background:#eef4ff!important;padding:8px 12px!important;color:#405778!important;font-size:12px!important}
+.operation-progress p {margin:0!important}.operation-progress .wrap {min-height:40px!important}
 @media(max-width:640px) {.step-card {padding:14px!important}.hero {padding:18px}.timeline-item {grid-template-columns:100px 1fr;gap:10px}}
 #tripgraph-editor .codemirror-wrapper {height:360px!important;max-height:360px!important;overflow:hidden!important}
 #tripgraph-editor .cm-editor {height:100%!important;max-height:100%!important}
@@ -632,7 +636,7 @@ def apply_tripgraph_edits(
     if needs_confirmation:
         updated["draft_trip"] = updated.pop("trip")
     updated["trip_source"] = "user_corrected"
-    for key in ("live_candidate_artifact", "live_inspection", "live_generated_at", "managed_session", "local_plan_options", "local_analysis_completed", "completion_rows", "completion_error", "recognition_confirmed"):
+    for key in ("live_candidate_artifact", "live_inspection", "live_generated_at", "managed_session", "local_plan_options", "local_plan_choice", "local_plan_notice", "local_analysis_completed", "completion_rows", "completion_error", "recognition_confirmed"):
         updated.pop(key, None)
     payload_to_clean = updated.get("trip") or updated.get("draft_trip")
     for event in payload_to_clean["events"]:
@@ -703,6 +707,7 @@ def generate_plan_b(
         options = schedule_options(state["trip"])
         updated = dict(state)
         updated["local_plan_options"] = options
+        updated.pop("local_plan_notice", None)
         text = (
             _normal_ticket_plan(state["trip"])
             if analysis.risk_count == 0 else
@@ -720,6 +725,7 @@ def generate_plan_b(
         if options:
             updated = dict(state)
             updated["local_plan_options"] = options
+            updated.pop("local_plan_notice", None)
             updated["local_analysis_completed"] = True
             amap_panel, inspection_panel = context_panels_for_state(updated)
             return options_markdown(state["trip"], options), "已基于当前上传行程生成局部调整候选，并重新校验结构、依赖、保护节点、预算和风险。未调用外部工具。", updated, amap_panel, inspection_panel
@@ -816,7 +822,23 @@ def _normal_ticket_plan(payload):
 
 def local_options_view(state):
     options = (state or {}).get("local_plan_options") or []
-    return gr.update(visible=bool(options)), gr.update(choices=[(option["label"], option["id"]) for option in options], value=options[0]["id"] if options else None)
+    identifiers = {option["id"] for option in options}
+    selected = (state or {}).get("local_plan_choice")
+    if selected not in identifiers:
+        selected = options[0]["id"] if options else None
+    return gr.update(visible=bool(options)), gr.update(choices=[(option["label"], option["id"]) for option in options], value=selected)
+
+
+def remember_local_choice(selected, state):
+    identifiers = {option["id"] for option in (state or {}).get("local_plan_options") or []}
+    return selected if isinstance(selected, str) and selected in identifiers else gr.skip()
+
+
+def plan_after_inspection(state, previous_text):
+    if (state or {}).get("local_plan_options"):
+        return options_markdown(state["trip"], state["local_plan_options"])
+    notice = (state or {}).get("local_plan_notice")
+    return "### ⚠️ 原局部方案需要重新生成\n\n" + notice if notice else gr.skip()
 
 
 def apply_local_option(selected, state):
@@ -831,6 +853,8 @@ def apply_local_option(selected, state):
     updated = dict(state)
     updated["trip"] = option["trip"]
     updated["local_plan_options"] = []
+    updated.pop("local_plan_choice", None)
+    updated.pop("local_plan_notice", None)
     updated["local_analysis_completed"] = True
     updated.pop("live_candidate_artifact", None)
     updated.pop("live_inspection", None)
@@ -876,6 +900,19 @@ def render_step_panels(state):
         *local_options_view(current),
         gr.update(visible=isinstance(current.get("trip"), dict) or isinstance(current.get("draft_trip"), dict)),
     )
+
+
+def timed_operation(callback, label):
+    """Append real execution duration; queue wait is shown by the native timer."""
+    @wraps(callback)
+    def execute(*args, **kwargs):
+        started = time.perf_counter()
+        result = callback(*args, **kwargs)
+        elapsed = time.perf_counter() - started
+        duration = "小于 0.01 秒" if elapsed < 0.01 else f"{elapsed:.2f} 秒"
+        values = result if isinstance(result, tuple) else (result,)
+        return *values, f"✅ {label}完成 · 执行耗时 {duration}"
+    return execute
 
 
 def generate_plan_b_guarded(
@@ -967,7 +1004,14 @@ def run_live_inspection_guarded(
         updated["live_candidate_artifact"] = result.candidate_artifact
     else:
         updated.pop("live_candidate_artifact", None)
-    updated.pop("local_plan_options", None)
+    if state.get("local_plan_options"):
+        # Inspection enriches evidence, not the user's choice of destination.
+        # Replay pending options on the enriched graph instead of deleting them.
+        updated["local_plan_options"] = schedule_options(updated["trip"])
+        if not updated["local_plan_options"]:
+            updated["local_plan_notice"] = "实时证据已更新，原局部方案不再通过当前风险或约束检查。原行程未修改，请重新生成 Plan B；不会自动替您选择或退改订单。"
+        else:
+            updated.pop("local_plan_notice", None)
     store["usage"] = consume_browser(usage, "agent_runs")
     amap_panel, inspection_panel = run_manual_inspection_for_state(updated)
     return amap_panel, inspection_panel, updated, store
@@ -1267,12 +1311,18 @@ def _session_snapshot(
     editor_text: str | None = None,
     completion_values: Any = None,
     question_text: str | None = None,
+    local_choice: str | None = None,
 ) -> dict[str, Any]:
     trip_state = dict(trip_state or {})
     for key in ("_history_preview_digests", "_history_cached_parse"):
         trip_state.pop(key, None)
     if isinstance(trip_state.get("draft_trip"), dict) and isinstance(completion_values, list):
         trip_state["completion_rows"] = completion_values
+    identifiers = {option["id"] for option in trip_state.get("local_plan_options") or []}
+    if local_choice in identifiers:
+        trip_state["local_plan_choice"] = local_choice
+    elif trip_state.get("local_plan_choice") not in identifiers:
+        trip_state.pop("local_plan_choice", None)
     safe_amap, safe_inspection = safe_context_panels(
         trip_state, amap_status, inspection_status
     )
@@ -1431,6 +1481,7 @@ def persist_current_session(
     editor_text: str | None = None,
     completion_values: Any = None,
     question_text: str | None = None,
+    local_choice: str | None = None,
 ) -> tuple[Any, ...]:
     snapshot = _session_snapshot(
         trip_state,
@@ -1442,7 +1493,7 @@ def persist_current_session(
         chat_history,
         amap_status,
         inspection_status,
-        image_previews, editor_text, completion_values, question_text,
+        image_previews, editor_text, completion_values, question_text, local_choice,
     )
     store = save_active_session(browser_store, snapshot)
     session = next(item for item in store["sessions"] if item["id"] == store["active_id"])
@@ -1467,6 +1518,7 @@ def create_new_history_session(
     editor_text: str | None = None,
     completion_values: Any = None,
     question_text: str | None = None,
+    local_choice: str | None = None,
 ) -> tuple[Any, ...]:
     snapshot = _session_snapshot(
         trip_state,
@@ -1478,7 +1530,7 @@ def create_new_history_session(
         chat_history,
         amap_status,
         inspection_status,
-        image_previews, editor_text, completion_values, question_text,
+        image_previews, editor_text, completion_values, question_text, local_choice,
     )
     store, session = create_session(browser_store, current_snapshot=snapshot)
     return store, _history_update(store), _session_badge(session), *_restored_history_view(session)
@@ -1500,6 +1552,7 @@ def open_history_session(
     editor_text: str | None = None,
     completion_values: Any = None,
     question_text: str | None = None,
+    local_choice: str | None = None,
 ) -> tuple[Any, ...]:
     if not target_id or target_id == (browser_store or {}).get("active_id"):
         # Dropdown blur can emit input even when selection never changed.
@@ -1515,7 +1568,7 @@ def open_history_session(
         chat_history,
         amap_status,
         inspection_status,
-        image_previews, editor_text, completion_values, question_text,
+        image_previews, editor_text, completion_values, question_text, local_choice,
     )
     try:
         store, session = switch_session(
@@ -1541,6 +1594,7 @@ def create_app() -> gr.Blocks:
     with gr.Blocks(title=PRODUCT_TITLE, delete_cache=(3600, 3600)) as demo:
         state = gr.State({})
         image_previews = gr.State([])
+        choice_state = gr.State(None)
         browser_store = gr.BrowserState(
             default_value={"version": 1, "active_id": None, "sessions": []},
             storage_key="triptwin_sessions_v1",
@@ -1604,6 +1658,7 @@ def create_app() -> gr.Blocks:
         with gr.Column(elem_id="step-build", elem_classes=["step-card"]):
             gr.HTML("<div class='step-heading'><span class='step-number'>2</span><div><h2>解析、补全与构建</h2><p>先解析截图，再补全并确认必要信息，构建完成后继续第 3 步。合成示例的信息已完整。</p></div></div>")
             build_button = gr.Button("② 解析行程截图", variant="primary")
+            build_progress = gr.Markdown("就绪 · 操作时显示加载计时", elem_id="build-progress", elem_classes=["operation-progress"])
             status = gr.Markdown("等待载入图片。")
             with gr.Column(visible=False) as completion_section:
                 completion_message = gr.Markdown()
@@ -1614,6 +1669,7 @@ def create_app() -> gr.Blocks:
                     label="补充信息 · 只修改填写值列",
                 )
                 confirm_import_button = gr.Button("确认信息并构建旅行数字孪生", variant="primary")
+                confirm_progress = gr.Markdown("就绪", elem_id="confirm-progress", elem_classes=["operation-progress"])
             timeline = gr.HTML(label="TripGraph 时间线")
             with gr.Accordion("校对与修改 · 结构化行程", open=False, visible=False) as editor_section:
                 gr.Markdown("高级校对：草稿不代表已构建行程；通常只需补全上方表格。若识别的车次、日期或关联编号有误，可在此修改完整 JSON 后校验，仍需确认必要参数。")
@@ -1626,6 +1682,7 @@ def create_app() -> gr.Blocks:
                     elem_id="tripgraph-editor",
                 )
                 apply_edits_button = gr.Button("应用并校验 TripGraph 修改")
+                edit_progress = gr.Markdown("就绪", elem_id="edit-progress", elem_classes=["operation-progress"])
             with gr.Accordion("查看字段识别置信度", open=False):
                 gr.Markdown("**识别置信度表示字段读得是否可靠，不表示行程是否合理。** 时间读准了仍可能冲突，请看第 3 步风险检查。车票示例的 1 表示人工核对清晰可见字段；被遮挡或缺失的字段会降低置信度。")
                 confidence = gr.Dataframe(
@@ -1643,16 +1700,20 @@ def create_app() -> gr.Blocks:
             with gr.Row():
                 check_button = gr.Button("③ 检查风险", variant="primary")
                 recheck_button = gr.Button("重新检查")
+            risk_progress = gr.Markdown("就绪 · 操作时显示加载计时", elem_id="risk-progress", elem_classes=["operation-progress"])
             risks = gr.Markdown("### 风险卡片\n\n等待检查。")
         with gr.Column(elem_id="step-plan", elem_classes=["step-card"]):
             gr.HTML("<div class='step-heading'><span class='step-number'>4</span><div><h2>生成 Plan B</h2><p>先尝试本地冲突调整；需要新候选时才执行实时工具核验。没有风险时无需替代方案。</p></div></div>")
             plan_button = gr.Button("④ 生成 Plan B", variant="primary")
+            plan_progress = gr.Markdown("就绪 · 操作时显示加载计时", elem_id="plan-progress", elem_classes=["operation-progress"])
             plan_b = gr.Markdown("### 原方案 / Plan B\n\n等待生成。")
             with gr.Column(visible=False) as local_options_section:
-                local_choice = gr.Dropdown(choices=[], label="选择保留的行程方案", interactive=True)
+                local_choice = gr.Dropdown(choices=[], label="选择保留的行程方案", interactive=True, elem_id="local-plan-choice")
                 apply_local_button = gr.Button("应用到当前行程 · 不执行实际退改", variant="primary")
+                apply_progress = gr.Markdown("就绪", elem_id="apply-progress", elem_classes=["operation-progress"])
             with gr.Accordion("查看工具证据与实时巡检", open=False):
                 inspect_button = gr.Button("查看 / 执行实时巡检", variant="secondary")
+                inspect_progress = gr.Markdown("就绪 · 操作时显示加载计时", elem_id="inspect-progress", elem_classes=["operation-progress"])
                 gr.Markdown("用户行程首次执行会调用高德并计入实时核验次数；1 小时内复用已有核验，过期后再次执行仍受每日额度限制。单段交通或同站衔接不查询跨城公交。云端核验可能需要数分钟，超时会提示失败，已生成内容仍可查看，请勿连续重复点击。功能示例仅查看已有演示证据或本地复检；本页面不会自动后台巡检。")
                 amap_status = gr.Markdown(EMPTY_AMAP_STATUS, elem_id="amap-evidence")
                 inspection_status = gr.Markdown(EMPTY_INSPECTION_STATUS, elem_id="inspection-evidence")
@@ -1687,8 +1748,10 @@ def create_app() -> gr.Blocks:
                         scale=5,
                     )
                     ask_button = gr.Button("发送", variant="primary", scale=1)
+                chat_progress = gr.Markdown("就绪", elem_id="chat-progress", elem_classes=["operation-progress"])
             with gr.Accordion("导出行程 · JSON / 日历 ICS", open=False):
                 export_button = gr.Button("导出 TripGraph JSON 与日历 ICS")
+                export_progress = gr.Markdown("就绪", elem_id="export-progress", elem_classes=["operation-progress"])
                 export_files = gr.File(
                     label="导出文件", file_count="multiple", interactive=False
                 )
@@ -1708,6 +1771,7 @@ def create_app() -> gr.Blocks:
             trip_json,
             completion_table,
             question,
+            choice_state,
         ]
         session_outputs = [history_store, history_select, session_badge]
         persist_outputs = [
@@ -1750,13 +1814,33 @@ def create_app() -> gr.Blocks:
         # this Gradio release drops toast metadata on direct HTTP failures.
         # Their progress is scoped to one small area, never the whole view.
         work_event = {"queue": True, "show_progress": "minimal", "trigger_mode": "once"}
+        progress_outputs = [build_progress, confirm_progress, edit_progress, risk_progress,
+                            plan_progress, apply_progress, inspect_progress, chat_progress, export_progress]
+
+        def mirror_history(current, trip_state):
+            # Durations describe an operation, not the next selected session.
+            return current, *("就绪" for _ in progress_outputs), (trip_state or {}).get("local_plan_choice")
+
+        def bind_operation(trigger, callback, label, progress, *, inputs, outputs, api_name=False):
+            targets = outputs if isinstance(outputs, list) else [outputs]
+            event = trigger(
+                timed_operation(callback, label), inputs=inputs, outputs=[*targets, progress],
+                api_name=api_name, queue=True, trigger_mode="once",
+                show_progress="full", show_progress_on=[progress],
+                concurrency_id=f"operation:{callback.__module__}.{callback.__qualname__}",
+            )
+            event.failure(
+                lambda: f"⚠️ {label}未完成，请查看错误提示后重试。",
+                outputs=progress, api_name=False, **local_event,
+            )
+            return event
         demo.load(
             initialize_session_history,
             inputs=[browser_store],
             outputs=[*session_outputs, *view_outputs],
             **local_event,
         ).success(
-            lambda current: current, inputs=history_store, outputs=browser_store,
+            mirror_history, inputs=[history_store, state], outputs=[browser_store, *progress_outputs, choice_state],
             api_name=False, **local_event,
         )
         import_outputs = [
@@ -1779,13 +1863,13 @@ def create_app() -> gr.Blocks:
                     if file_digest(path) not in expired:
                         attach_original_reference(photo, path, HISTORY_FILE_SECRET)
                     photos.append(photo)
-            return import_preview(files, preview), photos
+            return import_preview(files, preview), photos, None
 
         # Only actual upload/delete/clear actions capture new media. Restoring a
         # session programmatically must not clear its saved previews/results.
         for event in (image.upload, image.clear, image.delete):
             event(reset_import_for_files, inputs=[image, state], outputs=import_outputs, api_name=False, **local_event).success(
-                capture_import_preview, inputs=[image, state], outputs=[preview, image_previews], api_name=False, **local_event,
+                capture_import_preview, inputs=[image, state], outputs=[preview, image_previews, choice_state], api_name=False, **local_event,
             ).success(persist_current_session, inputs=session_inputs, outputs=persist_outputs, api_name=False, **local_event)
         load_context_event = load_event.success(
             context_panels_for_state,
@@ -1802,27 +1886,27 @@ def create_app() -> gr.Blocks:
                 make_loader(kind), outputs=[image, status, state], api_name=False, **local_event,
             )
             selected_event.success(context_panels_for_state, inputs=state, outputs=[amap_status, inspection_status], **local_event).success(
-                capture_import_preview, inputs=[image, state], outputs=[preview, image_previews], api_name=False, **local_event,
+                capture_import_preview, inputs=[image, state], outputs=[preview, image_previews, choice_state], api_name=False, **local_event,
             ).success(
                 persist_current_session, inputs=session_inputs, outputs=persist_outputs, api_name=False, **local_event,
             )
         clear_import_button.click(lambda: None, outputs=image, api_name=False, **local_event).success(
             reset_import_view, outputs=import_outputs, **local_event,
         ).success(
-            capture_import_preview, inputs=[image, state], outputs=[preview, image_previews], api_name=False, **local_event,
+            capture_import_preview, inputs=[image, state], outputs=[preview, image_previews, choice_state], api_name=False, **local_event,
         ).success(
             persist_current_session, inputs=session_inputs, outputs=persist_outputs, api_name=False, **local_event,
         )
         load_context_event.success(
-            capture_import_preview, inputs=[image, state], outputs=[preview, image_previews], api_name=False, **local_event,
+            capture_import_preview, inputs=[image, state], outputs=[preview, image_previews, choice_state], api_name=False, **local_event,
         ).success(
             persist_current_session,
             inputs=session_inputs,
             outputs=persist_outputs, api_name=False,
             **local_event,
         )
-        build_event = build_button.click(
-            parse_current_import,
+        build_event = bind_operation(
+            build_button.click, parse_current_import, "行程解析", build_progress,
             inputs=[image, privacy_confirmed, history_store, state],
             outputs=[
                 trip_json,
@@ -1832,8 +1916,6 @@ def create_app() -> gr.Blocks:
                 state,
                 history_store,
             ],
-            api_name=False,
-            show_progress_on=[status], **work_event,
         ).success(
             lambda current: (
                 "✅ 截图已解析，等待补全并确认；" if current.get("draft_trip") else "✅ TripGraph 已构建；"
@@ -1842,10 +1924,9 @@ def create_app() -> gr.Blocks:
             outputs=status,
             **local_event,
         ).success(reset_after_parse, inputs=state, outputs=[*downstream_outputs, confirmed], api_name=False, **local_event)
-        confirm_import_button.click(
-            confirm_import, inputs=[completion_table, state],
+        bind_operation(
+            confirm_import_button.click, confirm_import, "信息确认与构建", confirm_progress, inputs=[completion_table, state],
             outputs=[status, timeline, state, trip_json, confirmed], api_name=False,
-            show_progress_on=[status], **work_event,
         ).success(reset_downstream_view, outputs=downstream_outputs, api_name=False, **local_event).success(refresh_confidence, inputs=state, outputs=[confidence, low_confidence], **local_event).success(
             context_panels_for_state, inputs=state, outputs=[amap_status, inspection_status], **local_event,
         ).success(persist_current_session, inputs=session_inputs, outputs=persist_outputs, api_name=False, **local_event)
@@ -1861,12 +1942,11 @@ def create_app() -> gr.Blocks:
             outputs=persist_outputs, api_name=False,
             **local_event,
         )
-        edit_event = apply_edits_button.click(
-            apply_tripgraph_edits,
+        edit_event = bind_operation(
+            apply_edits_button.click, apply_tripgraph_edits, "行程修改校验", edit_progress,
             inputs=[trip_json, state],
             outputs=[trip_json, timeline, state, status, confirmed],
             api_name=False,
-            show_progress_on=[status], **work_event,
         ).success(reset_downstream_view, outputs=downstream_outputs, api_name=False, **local_event)
         edit_event.success(
             context_panels_for_state,
@@ -1881,19 +1961,17 @@ def create_app() -> gr.Blocks:
         )
         def export_callback(current):
             return export_current_trip(current, cache_root=export_files.GRADIO_CACHE)
-        export_button.click(
-            export_callback,
+        bind_operation(
+            export_button.click, export_callback, "行程导出", export_progress,
             inputs=[state],
             outputs=[export_files],
             api_name=False,
-            show_progress_on=[export_files], **work_event,
         )
-        check_event = check_button.click(
-            check_risks,
+        check_event = bind_operation(
+            check_button.click, check_risks, "风险检查", risk_progress,
             inputs=[state, confirmed],
             outputs=risks,
             api_name="check_risks",
-            show_progress_on=[risks], **work_event,
         )
         check_event.success(
             persist_current_session,
@@ -1901,9 +1979,8 @@ def create_app() -> gr.Blocks:
             outputs=persist_outputs, api_name=False,
             **local_event,
         )
-        recheck_event = recheck_button.click(
-            check_risks, inputs=[state, confirmed], outputs=risks,
-            show_progress_on=[risks], **work_event,
+        recheck_event = bind_operation(
+            recheck_button.click, check_risks, "风险复检", risk_progress, inputs=[state, confirmed], outputs=risks,
         )
         recheck_event.success(
             persist_current_session,
@@ -1911,12 +1988,11 @@ def create_app() -> gr.Blocks:
             outputs=persist_outputs, api_name=False,
             **local_event,
         )
-        plan_event = plan_button.click(
-            generate_plan_b_guarded,
+        plan_event = bind_operation(
+            plan_button.click, generate_plan_b_guarded, "Plan B 生成", plan_progress,
             inputs=[state, confirmed, history_store],
             outputs=[plan_b, trace, state, amap_status, inspection_status, history_store],
             api_name=False,
-            show_progress_on=[plan_b], **work_event,
         )
         plan_render_event = plan_event.success(
             render_state_trip,
@@ -1932,21 +2008,19 @@ def create_app() -> gr.Blocks:
             **local_event,
         )
         plan_event.success(local_options_view, inputs=state, outputs=[local_options_section, local_choice], **local_event)
-        apply_local_button.click(
-            apply_local_option, inputs=[local_choice, state],
+        bind_operation(
+            apply_local_button.click, apply_local_option, "方案应用与复检", apply_progress, inputs=[local_choice, state],
             outputs=[trip_json, timeline, risks, state, plan_b, status, confirmed], api_name=False,
-            show_progress_on=[status], **work_event,
         ).success(lambda: ([], "", None), outputs=[chatbot, question, export_files], api_name=False, **local_event).success(refresh_confidence, inputs=state, outputs=[confidence, low_confidence], **local_event).success(
             context_panels_for_state, inputs=state, outputs=[amap_status, inspection_status], **local_event,
         ).success(
             persist_current_session, inputs=session_inputs, outputs=persist_outputs, api_name=False, **local_event,
         )
-        inspect_event = inspect_button.click(
-            run_live_inspection_guarded,
+        inspect_event = bind_operation(
+            inspect_button.click, run_live_inspection_guarded, "行程巡检", inspect_progress,
             inputs=[state, confirmed, history_store],
             outputs=[amap_status, inspection_status, state, history_store],
             api_name=False,
-            show_progress_on=[trace], **work_event,
         )
         inspect_render_event = inspect_event.success(
             render_state_trip,
@@ -1956,6 +2030,8 @@ def create_app() -> gr.Blocks:
         ).success(check_risks, inputs=[state, confirmed], outputs=risks, api_name=False,
                   show_progress_on=[risks], **work_event).success(
             current_tool_trace, inputs=state, outputs=trace, api_name=False, **local_event,
+        ).success(
+            plan_after_inspection, inputs=[state, plan_b], outputs=plan_b, api_name=False, **local_event,
         )
         inspect_render_event.success(
             persist_current_session,
@@ -1963,12 +2039,11 @@ def create_app() -> gr.Blocks:
             outputs=persist_outputs, api_name=False,
             **local_event,
         )
-        ask_event = ask_button.click(
-            answer_question_guarded,
+        ask_event = bind_operation(
+            ask_button.click, answer_question_guarded, "行程问答", chat_progress,
             inputs=[question, chatbot, state, history_store],
             outputs=[question, chatbot, history_store],
             api_name=False,
-            show_progress_on=[chatbot], **work_event,
         )
         ask_event.success(
             persist_current_session,
@@ -1976,12 +2051,11 @@ def create_app() -> gr.Blocks:
             outputs=persist_outputs, api_name=False,
             **local_event,
         )
-        submit_event = question.submit(
-            answer_question_guarded,
+        submit_event = bind_operation(
+            question.submit, answer_question_guarded, "行程问答", chat_progress,
             inputs=[question, chatbot, state, history_store],
             outputs=[question, chatbot, history_store],
             api_name=False,
-            show_progress_on=[chatbot], **work_event,
         )
         submit_event.success(
             persist_current_session,
@@ -1995,7 +2069,7 @@ def create_app() -> gr.Blocks:
             outputs=[*session_outputs, *view_outputs],
             api_name="new_session",
             show_progress_on=[session_badge], **work_event,
-        ).success(lambda current: current, inputs=history_store, outputs=browser_store, api_name=False, **local_event)
+        ).success(mirror_history, inputs=[history_store, state], outputs=[browser_store, *progress_outputs, choice_state], api_name=False, **local_event)
         history_select.input(
             open_history_session,
             inputs=[history_select, *session_inputs],
@@ -2003,21 +2077,28 @@ def create_app() -> gr.Blocks:
             api_name=False,
             trigger_mode="always_last",
             queue=True, show_progress="minimal", show_progress_on=[session_badge],
-        ).success(lambda current: current, inputs=history_store, outputs=browser_store, api_name=False, **local_event)
+        ).success(mirror_history, inputs=[history_store, state], outputs=[browser_store, *progress_outputs, choice_state], api_name=False, **local_event)
         delete_session_button.click(
             delete_current_history_session,
             inputs=[history_store],
             outputs=[*session_outputs, *view_outputs],
             api_name=False,
             show_progress_on=[session_badge], **work_event,
-        ).success(lambda current: current, inputs=history_store, outputs=browser_store, api_name=False, **local_event)
+        ).success(mirror_history, inputs=[history_store, state], outputs=[browser_store, *progress_outputs, choice_state], api_name=False, **local_event)
         clear_sessions_button.click(
             clear_all_history_sessions,
             inputs=[history_store],
             outputs=[*session_outputs, *view_outputs],
             api_name=False,
             show_progress_on=[session_badge], **work_event,
-        ).success(lambda current: current, inputs=history_store, outputs=browser_store, api_name=False, **local_event)
+        ).success(mirror_history, inputs=[history_store, state], outputs=[browser_store, *progress_outputs, choice_state], api_name=False, **local_event)
+        # A delayed dropdown input may arrive after applying a plan has emptied
+        # its choices. Validate against the graph ourselves, not stale widget
+        # choices, and keep this UI value out of unrelated autosave inputs.
+        local_choice.input(
+            remember_local_choice, inputs=[local_choice, state], outputs=choice_state,
+            preprocess=False, api_name=False, **local_event,
+        ).success(persist_current_session, inputs=session_inputs, outputs=persist_outputs, api_name=False, **local_event)
         for component in (trip_json, completion_table):
             component.input(
                 persist_current_session, inputs=session_inputs, outputs=persist_outputs,
