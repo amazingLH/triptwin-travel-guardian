@@ -38,8 +38,8 @@
 - [x] 更新 [正文草稿](submission-draft.md)、[版本记录](release-record.md) 与 [提交步骤](submission-guide.md)。
 - [x] 按 [截图索引](evidence/stage8-public/README.md) 整理四张最新行程、风险、Plan B 及应用结果原图，嵌入正文；历史真实工具截图单列，不冒充本次调用。
 - [ ] 作者核对主要提交人、报名意向和赛道登记回执。
-- [ ] 作者正式提交官方作品 Issue，保存链接、编号与日期。
-- [ ] 检查正式帖中的 Demo、代码和图片均可公开访问。
+- [x] 作者于 2026-10-14 16:08:17（北京时间）发布 [官方作品 Issue #181](https://github.com/modelstudioai/modelstudioai.github.io/issues/181)，链接、编号和时间已存入版本记录。
+- [x] 正式帖公开可访问，渲染 HTML 中有 5 张截图；图片、代码及创空间入口 HTTP 200，不代表完整应用交互另获独立验收。
 
 ## 必需 Secrets
 
